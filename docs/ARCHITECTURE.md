@@ -18,11 +18,14 @@ herdr / codex / claude 等本地 agent loop 需要感知外部系统（内网 Gi
 外部系统        GitLab（内网）· 未来更多源
    │  webhook POST
    ▼
-flume           验签 · 归一 · 喂入          ← 零状态翻译层 + 单一入口
+flume           验签 · 归一 · 喂入 · 转发      ← 零状态翻译层 + 单一入口
    │  POST /sources/{id}/events
    ▼
 AgentInbox      stream · 订阅 · inbox · ack · activation   ← 可靠性语义
-   │  webhook（activation_only）
+   │  webhook（activation_only）→ flume /activation
+   ▼
+flume          校验 · 只转发 activation 四字段             ← 不读正文
+   │  POST activation_only
    ▼
 herdr           唤醒门 · 等待表 · 授权门 · agent loop        ← 决策与执行
 ```
@@ -30,7 +33,7 @@ herdr           唤醒门 · 等待表 · 授权门 · agent loop        ← 决
 | 层 | 拥有什么 | 绝不拥有 |
 | :--- | :--- | :--- |
 | 外部系统 | 事件源、投递重试 | — |
-| flume | webhook 入口、验签、归一化、进程入口 | 队列、重试、去重、持久化 |
+| flume | webhook 入口、验签、归一化、activation_only 无状态转发、进程入口 | 队列、重试、去重、持久化、唤醒决策 |
 | AgentInbox | durable stream、native-id 去重、订阅过滤、inbox/ack、唤醒租约 | 业务判据 |
 | herdr | wake_condition、授权、开 turn、任务语义 | 事件接入细节 |
 
@@ -48,12 +51,75 @@ herdr           唤醒门 · 等待表 · 授权门 · agent loop        ← 决
 2. flume 验 `X-Gitlab-Token`，解析 payload，归一成 envelope
 3. flume 打 `POST /sources/{id}/events`，native-id 用 GitLab 投递 UUID（天然去重）
 4. AgentInbox 落 durable stream，按 subscription 匹配到目标 agent，写 inbox entry
-5. AgentInbox 以 activation_only webhook 唤醒 herdr 唤醒门
-6. 唤醒门（= coordinator）查等待表 wake_condition：
+5. AgentInbox 以 activation_only webhook POST flume `/activation`
+6. flume 校验并只转发 `kind/newEntryCount/latestEntryId/summary` 到 herdr 唤醒门
+7. 唤醒门（= coordinator）查等待表 wake_condition：
    - 命中 → 过授权门 → coordinator `inbox read` 取正文 → **进件 board task**（事件内容转录进 brief）→ `ack --through` 销账 → 派工 worker 跑 run
    - 未命中 → 不进件，条目留待，不烧钱
 
-判据分叉在第 6 步。前三步纯搬运，不许长出判断。**read / 进件 / ack 三条动作全归 coordinator（判断位）**——worker 只读 brief，不知道 agentinbox 存在。事件是 herdr-projects 的一种 TRIGGER（监控告警类），走既有进件口，不另开通道。
+判据分叉在第 7 步。前六步纯搬运，不许长出判断。**read / 进件 / ack 三条动作全归 coordinator（判断位）**——worker 只读 brief，不知道 agentinbox 存在。事件是 herdr-projects 的一种 TRIGGER（监控告警类），走既有进件口，不另开通道。
+
+### 2.1 唤醒链路真对接
+
+`POST /sources/{id}/events` 只返回 append 结果，不返回 inbox entry id；
+`newEntryCount` 和 `latestEntryId` 只有订阅匹配、写入 inbox 之后才存在。flume
+不能在 feed 返回时自己编一个 entry id，而要接收 AgentInbox 写箱后发出的
+activation webhook，再把它无状态转发给 herdr 唤醒门。
+
+AgentInbox 的 webhook target 指向 flume：
+
+```bash
+agentinbox agent register --agent-id <herdr-agent> \
+  --webhook-url http://<flume>:9420/activation \
+  --webhook-activation-mode activation_only
+```
+
+flume 的转发目标由 `FLUME_HERDR_WAKE_URL` 指定，超时由
+`FLUME_HERDR_WAKE_TIMEOUT`（默认 5 秒）指定。收到合法 activation 后，flume
+只发一次下面的 HTTP 请求；不排队、不重试、不落盘。
+
+```http
+POST <FLUME_HERDR_WAKE_URL>
+Content-Type: application/json
+Accept: application/json
+X-Flume-Activation-Mode: activation_only
+
+{
+  "kind": "agentinbox.activation",
+  "newEntryCount": 2,
+  "latestEntryId": "entry-42",
+  "summary": "2 new GitLab events"
+}
+```
+
+AgentInbox 原始 activation 还会带 `activationId`、`agentId`、`inboxId`、
+`targetId` 等路由元数据；flume 只校验并转发唤醒门需要的四个字段。任何
+`entries` / `items`（正文）出现时直接拒绝，不能把正文带进唤醒链路。
+
+herdr 唤醒门把四个字段映射成等待表判据：
+
+| activation 字段 | 等待表含义 |
+| :--- | :--- |
+| `kind` | 必须是 `agentinbox.activation`；其他 kind 不进入唤醒链路 |
+| `newEntryCount` | 「等什么」：`> 0` 才叫醒；`0` 是空激活，不调用唤醒门 |
+| `latestEntryId` | 「等到什么算完成」：`inbox read` 处理完执行 `ack --through <latestEntryId>` |
+| `summary` | 只用于显示与日志，不参与授权判断，也不能替代 inbox 正文 |
+
+等待表合同可表示为：
+
+```json
+{
+  "waitFor": {"kind": "agentinbox.activation", "newEntryCountAtLeast": 1},
+  "newEntryCount": 2,
+  "latestEntryId": "entry-42",
+  "summary": "2 new GitLab events",
+  "completeWhen": {"kind": "inbox.ack", "through": "entry-42"}
+}
+```
+
+**唤醒 ≠ 授权。** flume 只把 activation 交给唤醒门，不决定是否开 turn；唤醒门
+命中后仍要过授权门，正文仍要回 `inbox read`。唤醒门返回非 2xx 时 flume 向
+AgentInbox 回 502，由 AgentInbox 的投递机制重试。
 
 ## 4. 归一 envelope
 
@@ -173,14 +239,16 @@ core 不动。adapter 只做两件事：验签、折 envelope。不许在 adapte
 
 - flume 与 AgentInbox daemon 同机（其 HTTP API 只监听 loopback/unix socket）
 - GitLab webhook 指向 flume 的内网口；token 走环境变量，不进仓库
-- herdr 在哪，这套就部署在哪；唤醒门 URL 是 herdr coordinator 的入口
+- herdr 在哪，这套就部署在哪；`FLUME_HERDR_WAKE_URL` 是 herdr 唤醒门的入口
 
 AgentInbox 侧一次性配置：
 
 ```bash
 agentinbox host add local_event flume
 agentinbox source add <host_id> events gitlab
-agentinbox agent register --agent-id <herdr-agent> --webhook-url <唤醒门>
+agentinbox agent register --agent-id <herdr-agent> \
+  --webhook-url http://<flume>:9420/activation \
+  --webhook-activation-mode activation_only
 agentinbox subscription add <source_id> --agent-id <herdr-agent>
 ```
 
@@ -193,12 +261,13 @@ source 共享、subscription 私有——别一个 PR 一个 source。
 - envelope + gitlab adapter（验签 / 归一 / native_id 稳定性）
 - feed 打通 unix socket HTTP（CLI 后备）
 - 单一入口 flume start（ensure ≠ own）
-- 端到端验收：假 MR 事件 → 202 → inbox entry → 唤醒门命中
+- activation_only 转发：`POST /activation` 校验四字段并调用 herdr 唤醒门
+- 等待表判据合同：`newEntryCount` 决定是否唤醒，`latestEntryId` 决定何时完成
+- 端到端验收：假 MR 事件 → 202 → inbox entry → activation → 唤醒门命中
 
 ### 阶段二：接 herdr（唤醒变决策）
 
-- 唤醒门接 activation payload
-- 等待表 wake_condition 判据对齐 subject / event
+- herdr 侧消费等待表合同，并按 subject / event 对齐具体等待项
 - 授权门落位：唤醒 ≠ 授权的运行时体现
 - 端到端验收：真实 GitLab 事件 → 唤醒 → 判据命中才开 turn
 
@@ -217,8 +286,9 @@ projects/flume/
   package.json          # dependency: @holon-run/agentinbox；bin: flume
   docs/ARCHITECTURE.md  # 本文件
   src/
-    index.ts            # 入口：start / ensure daemon / 开门
-    core.ts             # HTTP 门面：verify -> normalize -> feed
+    cli.ts              # 入口：start / ensure daemon / 开门
+    core.ts             # HTTP 门面：verify -> normalize -> feed / activation
+    activation.ts       # activation_only 校验、转发、等待表合同
     envelope.ts         # Envelope 形状与校验
     feed.ts             # 唯一接缝：HTTP 默认 / CLI 后备
     adapters/
@@ -246,13 +316,15 @@ SECRET_ENV 自动进必填名单，缺了直接 exit 2，不带病启动。
 | 400 | 非 JSON / envelope 不合法 |
 | 401 | token 错 |
 | 413 | body 超 8MB |
-| 502 | AgentInbox 没收下（不重试，交上游投递重试） |
+| 502 | AgentInbox 没收下，或唤醒门拒绝 activation（不重试，交上游投递重试） |
+| 503 | activation 合法但未配置 `FLUME_HERDR_WAKE_URL` |
 
-### 测试三类
+### 测试类别
 
 1. normalize 纯函数：典型 payload → envelope（重点 native_id 稳定性、event 命名）
 2. 端到端冒烟：mock feed，POST 假 webhook，断言 202 与喂入参数
 3. 错误路径：401 / 400 / 502 / 413
+4. activation：真实本地 HTTP 唤醒门调用、四字段 payload、等待表判据、正文拒收
 
 ### 配置
 
@@ -262,6 +334,8 @@ SECRET_ENV 自动进必填名单，缺了直接 exit 2，不带病启动。
 | FLUME_GITLAB_TOKEN | 必填 | GitLab webhook secret |
 | FLUME_BIND | 127.0.0.1 | 给内网打时改 0.0.0.0 |
 | FLUME_PORT | 9420 | 监听端口 |
+| FLUME_HERDR_WAKE_URL | 未配置 | herdr 唤醒门的绝对 HTTP(S) URL |
+| FLUME_HERDR_WAKE_TIMEOUT | 5 | 唤醒门调用超时，单位秒 |
 
 token 不进仓库、不进日志、不进响应体。
 

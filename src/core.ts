@@ -2,6 +2,13 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
+import {
+  Activation,
+  ActivationError,
+  DEFAULT_WAKE_TIMEOUT_MS,
+  dispatchActivation,
+  WakeGateError,
+} from "./activation.js";
 import { allAdapters, getAdapter } from "./adapters/index.js";
 import {
   EnvelopeError,
@@ -25,6 +32,8 @@ export interface Config {
   port: number;
   sourceId: string;
   secrets: Record<string, string>;
+  wakeUrl?: string;
+  wakeTimeoutMs?: number;
 }
 
 export type FeedFunction = (
@@ -48,6 +57,12 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
     throw new ConfigError("FLUME_PORT must be an integer from 0 to 65535");
   }
 
+  const timeoutText = env.FLUME_HERDR_WAKE_TIMEOUT || "5";
+  const timeoutSeconds = Number(timeoutText);
+  if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
+    throw new ConfigError("FLUME_HERDR_WAKE_TIMEOUT must be positive");
+  }
+
   return {
     bind: env.FLUME_BIND || "127.0.0.1",
     port,
@@ -55,6 +70,8 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
     secrets: Object.fromEntries(
       allAdapters().map((adapter) => [adapter.NAME, env[adapter.SECRET_ENV]!]),
     ),
+    wakeUrl: env.FLUME_HERDR_WAKE_URL?.trim() || undefined,
+    wakeTimeoutMs: timeoutSeconds * 1_000,
   };
 }
 
@@ -91,6 +108,11 @@ async function handleRequest(
   if (request.method !== "POST") {
     request.resume();
     sendJson(response, 404, { error: "not found" }, true);
+    return;
+  }
+
+  if (pathname === "activation") {
+    await handleActivation(config, request, response);
     return;
   }
 
@@ -163,6 +185,81 @@ async function handleRequest(
     return;
   }
 
+  sendJson(response, 202, { accepted: 1 });
+}
+
+async function handleActivation(
+  config: Config,
+  request: IncomingMessage,
+  response: ServerResponse,
+): Promise<void> {
+  let body: Buffer;
+  try {
+    body = await readBody(request);
+  } catch (error) {
+    if (error instanceof EmptyBodyError) {
+      sendJson(response, 400, { error: "empty body" });
+    } else if (error instanceof BodyTooLargeError) {
+      sendJson(response, 413, { error: "body too large" }, true);
+    } else {
+      sendJson(response, 400, { error: "bad request" });
+    }
+    return;
+  }
+
+  let document: JsonObject;
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(body);
+    const parsed: unknown = JSON.parse(text);
+    if (!isJsonObject(parsed)) {
+      sendJson(response, 400, { error: "payload must be a JSON object" });
+      return;
+    }
+    document = parsed;
+  } catch {
+    sendJson(response, 400, { error: "invalid json" });
+    return;
+  }
+
+  let activation: Activation;
+  try {
+    activation = Activation.fromDocument(document);
+  } catch (error) {
+    if (error instanceof ActivationError) {
+      sendJson(response, 400, { error: error.message });
+      return;
+    }
+    console.error("flume: activation validation failed");
+    sendJson(response, 500, { error: "internal error" });
+    return;
+  }
+
+  if (!activation.waitCondition().shouldWake) {
+    sendJson(response, 202, { accepted: 0 });
+    return;
+  }
+  if (!config.wakeUrl) {
+    console.error("flume: activation rejected: FLUME_HERDR_WAKE_URL is not set");
+    sendJson(response, 503, { error: "wake gate not configured" });
+    return;
+  }
+
+  try {
+    await dispatchActivation(
+      config.wakeUrl,
+      activation,
+      config.wakeTimeoutMs ?? DEFAULT_WAKE_TIMEOUT_MS,
+    );
+  } catch (error) {
+    const detail = error instanceof WakeGateError ? error.message : String(error);
+    console.error(`flume: wake gate failed: ${detail}`);
+    sendJson(response, 502, { error: "wake gate failed" });
+    return;
+  }
+
+  console.log(
+    `flume: woke herdr newEntryCount=${activation.newEntryCount} latestEntryId=${activation.latestEntryId}`,
+  );
   sendJson(response, 202, { accepted: 1 });
 }
 

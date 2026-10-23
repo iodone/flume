@@ -4,20 +4,24 @@
 
 架构合同：[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
 
-> **状态**：设计定稿，实现待启动。本 README 是目标形态的使用说明书。
+> **状态**：阶段一核心通道与 activation_only 转发已实现；herdr 侧判据决策按阶段二推进。
 
 ## 是什么
 
 ```
-外部系统 ──webhook POST──▶ flume ──source event──▶ AgentInbox ──activation──▶ herdr
-                        验签·归一·喂入
+外部系统 ──webhook POST──▶ flume ──source event──▶ AgentInbox
+                        验签·归一·喂入                    │
+                                                          │ activation_only
+                                                          ▼
+herdr ◀──只转发四字段── flume /activation
 ```
 
-flume 做三件事，且只做三件事：
+flume 做四件事，且只做四件事：
 
 1. **验签**：按 adapter 校验来源（GitLab 用 `X-Gitlab-Token`）
 2. **归一**：把各家 payload 折成统一 envelope（`native_id` / `event` / `occurred_at` / `source` / `subject` / `payload`）
 3. **喂入**：把事件交给 AgentInbox 收件箱
+4. **转发唤醒**：校验 activation_only 四字段并调用 herdr 唤醒门，不转发正文
 
 ## 红线
 
@@ -47,7 +51,8 @@ agentinbox source add <hst_id> events gitlab     # → src_...
 
 # 3. 注册 agent 并挂唤醒 target（activation_only）
 agentinbox agent register --agent-id <herdr-agent> \
-  --webhook-url http://<herdr唤醒门>
+  --webhook-url http://<flume>:9420/activation \
+  --webhook-activation-mode activation_only
 
 # 4. 订阅（source 共享，subscription 私有——别一个 PR 一个 source）
 agentinbox subscription add <src_id> --agent-id <herdr-agent>
@@ -63,7 +68,7 @@ flume start
 `flume start` 做三件事：
 
 1. 探 `~/.agentinbox/agentinbox.sock`——活着就 attach，不碰它的生命周期；没有才 spawn `agentinbox serve`，own 它（**ensure ≠ own**，daemon 是共享设施）
-2. 开 webhook 门（`FLUME_BIND:FLUME_PORT`）
+2. 开 webhook 门（`FLUME_BIND:FLUME_PORT`）与 `/activation` 转发口
 3. 退出只收自己 spawn 的子进程
 
 ### 外部系统侧：配置 webhook（内网 GitLab 为例）
@@ -92,6 +97,27 @@ agentinbox inbox read --agent-id <herdr-agent>
 
 判据：inbox 出现 entry + 唤醒门收到 `kind: agentinbox.activation`。两条都到，链路才算通。
 
+### 唤醒链路：activation_only
+
+AgentInbox 写 inbox 后向 flume `/activation` 发 webhook。flume 只接受四个唤醒字段：
+
+```json
+{
+  "kind": "agentinbox.activation",
+  "newEntryCount": 2,
+  "latestEntryId": "entry-42",
+  "summary": "2 new GitLab events"
+}
+```
+
+带有 `entries` / `items` 正文的请求直接 400。合法且 `newEntryCount > 0` 时，flume 向
+`FLUME_HERDR_WAKE_URL` 发一次 `X-Flume-Activation-Mode: activation_only` 请求；
+`newEntryCount == 0` 返回 `202 {"accepted":0}` 且不调用唤醒门。
+
+herdr 等待表按 `newEntryCount` 判断是否叫醒，以 `latestEntryId` 作为完成判据：
+处理完 inbox 条目后执行 `ack --through <latestEntryId>`。`summary` 只用于显示，
+不参与授权。
+
 ## 进程模型：谁执行什么
 
 **用户只启动一个东西：`flume start`。** AgentInbox daemon 不用单独启动——flume 探 `~/.agentinbox/agentinbox.sock`，没有就 spawn 自举，已在跑就 attach（ensure ≠ own）。
@@ -99,7 +125,7 @@ agentinbox inbox read --agent-id <herdr-agent>
 | 角色 | 形态 | 职责 | 何时活 |
 | :--- | :--- | :--- | :--- |
 | AgentInbox daemon | 常驻（系统引擎） | 去重、订阅分发、落 inbox、派发唤醒 | 一直跑 |
-| flume | 随 `flume start` 监听 | 收 webhook → 验签 → 归一 → 喂 daemon | 事件到达那一刻 |
+| flume | 随 `flume start` 监听 | 收 webhook → 验签 → 归一 → 喂 daemon；转发 activation_only | 事件到达那一刻 |
 | herdr coordinator | 常驻（判断位） | 收唤醒 → 查等待表判据 → `inbox read` 取正文 → **进件 board task** → `ack --through` | 被唤醒那一刻 |
 | worker | 随 run（执行位） | 执行 brief、走完成线/评审门——**不知道 agentinbox 存在** | run 期间 |
 
@@ -109,6 +135,7 @@ agentinbox inbox read --agent-id <herdr-agent>
 GitLab 推事件
   → flume（验签·归一·喂入）                       瞬时
   → daemon（去重→订阅匹配→落 inbox→唤醒）          常驻引擎
+  → flume /activation（校验并只转发四字段）         瞬时
   → coordinator 唤醒门（查等待表 wake_condition）
        命中 → read 取正文 → 进件 board task → ack 销账
               → 派工 → worker 跑 run（只读 brief）
@@ -139,7 +166,10 @@ FL -> AI : POST /sources/{id}/events
 deactivate FL
 activate AI
 AI -> AI : 去重 · 订阅匹配 · 落 inbox
-AI -> CO : activation_only 唤醒（只带 entryId）
+AI -> FL : activation_only webhook（四字段）
+activate FL
+FL -> CO : POST activation_only（不转发正文）
+deactivate FL
 deactivate AI
 
 == 2 判断与进件（coordinator 一把梭） ==
@@ -184,15 +214,18 @@ end note
 | `FLUME_GITLAB_TOKEN` | 必填 | GitLab webhook secret token |
 | `FLUME_BIND` | `127.0.0.1` | 给内网打时改 `0.0.0.0` |
 | `FLUME_PORT` | `9420` | 监听端口 |
+| `FLUME_HERDR_WAKE_URL` | 未配置 | herdr 唤醒门的绝对 HTTP(S) URL |
+| `FLUME_HERDR_WAKE_TIMEOUT` | `5` | 唤醒门调用超时，单位秒 |
 
 ## 端点
 
 | 方法 | 路径 | 结果 |
 | :--- | :--- | :--- |
 | `POST` | `/<adapter>`，如 `/gitlab` | `202 {"accepted":1}` · `400` 非 JSON/非法 envelope · `401` token 错 · `502` 没喂进去 · `413` 超 8MB |
+| `POST` | `/activation` | `202 {"accepted":1}` 已转发 · `202 {"accepted":0}` 空激活 · `400` 非法/带正文 · `502` 唤醒门失败 · `503` 未配置唤醒门 |
 | `GET` | `/healthz` | `200 {"ok":true}` |
 
-**不重试**：`502` 交给上游的投递重试；同一投递重试时 `native_id` 不变，AgentInbox 自动 dedupe。
+**不重试**：事件 `502` 交给上游投递重试；同一投递重试时 `native_id` 不变，AgentInbox 自动 dedupe。activation `502` 交给 AgentInbox 的 webhook 投递机制重试。
 
 feed 走 AgentInbox 的 unix socket HTTP API（`POST /sources/{id}/events`），CLI spawn 为后备——唯一接缝就在 feed 一个模块。
 
