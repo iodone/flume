@@ -116,6 +116,61 @@ GitLab 推事件
 
 命令执行者是 herdr 侧（read/ack 是 agent 的动作）；flume 只搬运，daemon 只管货。
 
+### 完整运行态序列图
+
+```plantuml
+@startuml
+title 运行态序列：一条 MR 事件到 agent 销账
+
+actor       "GitLab"             as GL
+participant "flume"              as FL
+participant "AgentInbox\ndaemon"  as AI
+participant "herdr 唤醒门"         as WG
+participant "herdr agent"        as AG
+
+== 事件搬运（纯传输，不许长出判断） ==
+
+GL -> FL : 1 webhook POST（MR opened）
+activate FL
+FL -> FL : 2 验签 · 归一 envelope
+FL -> AI : 3 POST /sources/{id}/events（native-id = 投递 UUID）
+activate AI
+AI -> AI : 4 去重 → 订阅匹配 → 落 inbox
+AI -> WG : 5 activation_only 唤醒（只带 entryId 指针）
+deactivate AI
+deactivate FL
+
+== 判据分叉（唤醒 ≠ 授权） ==
+
+activate WG
+WG -> WG : 6 查等待表 wake_condition
+alt 未命中
+    WG -> WG : 条目留待，不烧钱
+else 命中
+    WG -> WG : 7 过授权门
+    WG -> AG : 8 开 turn（brief 只带 entryId）
+end
+deactivate WG
+
+== agent 干活（知识常驻，不是注入） ==
+
+activate AG
+note over AG
+  常驻知识（一次性接线）
+  AGENTS.md / skill：inbox read、ack --through
+  不用 --all；不注入、不随唤醒传递
+end note
+AG -> AI : 9 inbox read
+activate AI
+AI --> AG : 10 返回正文
+deactivate AI
+AG -> AG : 11 干活
+AG -> AI : 12 ack --through（销账）
+deactivate AG
+
+@enduml
+```
+
 ## 配置
 
 全部走环境变量，token 不进仓库、不进日志、不进响应体。缺必填项直接 exit 2。
