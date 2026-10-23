@@ -96,6 +96,17 @@ flume 内部唯一事件形状，adapter 负责把各家 payload 折成它：
 
 开 turn 的 brief 最多带一个 `entryId` 数据指针——那是路由信息，不是说明书。
 
+### 装不装 agentinbox skill？分人
+
+| 谁 | 需要什么 | 载体 |
+| :--- | :--- | :--- |
+| herdr worker/reviewer（运行态） | 三条动作：inbox read / ack --through / 不用 --all | AGENTS.md 一段 |
+| operator（建源、注册、订阅、改拓扑） | 完整操作纪律 | agentinbox skill 或 CLI |
+
+理由：skill 是 onboarding/操作手册（含 host add / source add / agent register 等控制面操作），给运行态 agent 是越权风险——「唤醒只传指针」会退化成「不给钱但塞了改系统的说明书」。且 herdr 知识链 = rules_file + brief + instructions，**没有 skill 槽位**，装了也进不了 flow。
+
+一句话：**手册给操作者，动作给工人。** worker 何时值得拿手册 = 信任梯度允许它自主改拓扑那天。
+
 ## 5. 技术形态
 
 ### 5.1 Node/TS 同生态
