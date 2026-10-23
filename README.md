@@ -92,6 +92,30 @@ agentinbox inbox read --agent-id <herdr-agent>
 
 判据：inbox 出现 entry + 唤醒门收到 `kind: agentinbox.activation`。两条都到，链路才算通。
 
+## 进程模型：谁执行什么
+
+**用户只启动一个东西：`flume start`。** AgentInbox daemon 不用单独启动——flume 探 `~/.agentinbox/agentinbox.sock`，没有就 spawn 自举，已在跑就 attach（ensure ≠ own）。
+
+| 角色 | 形态 | 职责 | 何时活 |
+| :--- | :--- | :--- | :--- |
+| AgentInbox daemon | 常驻（系统引擎） | 去重、订阅分发、落 inbox、派发唤醒 | 一直跑 |
+| flume | 随 `flume start` 监听 | 收 webhook → 验签 → 归一 → 喂 daemon | 事件到达那一刻 |
+| herdr coordinator | 常驻 | 收唤醒 → 查等待表判据 → 授权门 → 开 turn | 被唤醒那一刻 |
+| herdr agent | 随 turn | `inbox read` 取正文、干活、`ack --through` 销账 | 开 turn 期间 |
+
+消息流转是**事件驱动**，全链无轮询：
+
+```
+GitLab 推事件
+  → flume（验签·归一·喂入）                      瞬时
+  → daemon（去重→订阅匹配→落 inbox→唤醒）         常驻引擎
+  → herdr 唤醒门（查等待表 wake_condition）
+       命中 → 授权 → agent 开 turn：read → 干活 → ack
+       未命中 → 条目留待，不烧钱
+```
+
+命令执行者是 herdr 侧（read/ack 是 agent 的动作）；flume 只搬运，daemon 只管货。
+
 ## 配置
 
 全部走环境变量，token 不进仓库、不进日志、不进响应体。缺必填项直接 exit 2。
