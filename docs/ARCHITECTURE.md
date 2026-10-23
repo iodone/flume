@@ -49,11 +49,11 @@ herdr           唤醒门 · 等待表 · 授权门 · agent loop        ← 决
 3. flume 打 `POST /sources/{id}/events`，native-id 用 GitLab 投递 UUID（天然去重）
 4. AgentInbox 落 durable stream，按 subscription 匹配到目标 agent，写 inbox entry
 5. AgentInbox 以 activation_only webhook 唤醒 herdr 唤醒门
-6. 唤醒门查等待表 wake_condition：
-   - 命中 → 过授权门 → 开 turn，agent inbox read 取正文，干完 ack --through 销账
-   - 未命中 → 不开 turn，条目留待，不烧钱
+6. 唤醒门（= coordinator）查等待表 wake_condition：
+   - 命中 → 过授权门 → coordinator `inbox read` 取正文 → **进件 board task**（事件内容转录进 brief）→ `ack --through` 销账 → 派工 worker 跑 run
+   - 未命中 → 不进件，条目留待，不烧钱
 
-判据分叉在第 6 步。前三步纯搬运，不许长出判断。
+判据分叉在第 6 步。前三步纯搬运，不许长出判断。**read / 进件 / ack 三条动作全归 coordinator（判断位）**——worker 只读 brief，不知道 agentinbox 存在。事件是 herdr-projects 的一种 TRIGGER（监控告警类），走既有进件口，不另开通道。
 
 ## 4. 归一 envelope
 
@@ -100,10 +100,13 @@ flume 内部唯一事件形状，adapter 负责把各家 payload 折成它：
 
 | 谁 | 需要什么 | 载体 |
 | :--- | :--- | :--- |
-| herdr worker/reviewer（运行态） | 三条动作：inbox read / ack --through / 不用 --all | AGENTS.md 一段 |
+| herdr coordinator（判断位） | 三条动作：inbox read / 进件 / ack --through（不用 --all） | AGENTS.md（rules_file）一段 |
+| worker / reviewer（执行位） | 无——只读 brief 干活 | 不需要任何 agentinbox 知识 |
 | operator（建源、注册、订阅、改拓扑） | 完整操作纪律 | agentinbox skill 或 CLI |
 
 理由：skill 是 onboarding/操作手册（含 host add / source add / agent register 等控制面操作），给运行态 agent 是越权风险——「唤醒只传指针」会退化成「不给钱但塞了改系统的说明书」。且 herdr 知识链 = rules_file + brief + instructions，**没有 skill 槽位**，装了也进不了 flow。
+
+**收口原则：inbox 只是入口，brief 才是记忆。** coordinator 把事件内容转录进 brief（进件 board task）= 记忆落进三样之一（任务系统），inbox 即可销账。worker 全程只见 brief。
 
 一句话：**手册给操作者，动作给工人。** worker 何时值得拿手册 = 信任梯度允许它自主改拓扑那天。
 

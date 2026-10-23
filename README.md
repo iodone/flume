@@ -100,73 +100,76 @@ agentinbox inbox read --agent-id <herdr-agent>
 | :--- | :--- | :--- | :--- |
 | AgentInbox daemon | 常驻（系统引擎） | 去重、订阅分发、落 inbox、派发唤醒 | 一直跑 |
 | flume | 随 `flume start` 监听 | 收 webhook → 验签 → 归一 → 喂 daemon | 事件到达那一刻 |
-| herdr coordinator | 常驻 | 收唤醒 → 查等待表判据 → 授权门 → 开 turn | 被唤醒那一刻 |
-| herdr agent | 随 turn | `inbox read` 取正文、干活、`ack --through` 销账 | 开 turn 期间 |
+| herdr coordinator | 常驻（判断位） | 收唤醒 → 查等待表判据 → `inbox read` 取正文 → **进件 board task** → `ack --through` | 被唤醒那一刻 |
+| worker | 随 run（执行位） | 执行 brief、走完成线/评审门——**不知道 agentinbox 存在** | run 期间 |
 
 消息流转是**事件驱动**，全链无轮询：
 
 ```
 GitLab 推事件
-  → flume（验签·归一·喂入）                      瞬时
-  → daemon（去重→订阅匹配→落 inbox→唤醒）         常驻引擎
-  → herdr 唤醒门（查等待表 wake_condition）
-       命中 → 授权 → agent 开 turn：read → 干活 → ack
+  → flume（验签·归一·喂入）                       瞬时
+  → daemon（去重→订阅匹配→落 inbox→唤醒）          常驻引擎
+  → coordinator 唤醒门（查等待表 wake_condition）
+       命中 → read 取正文 → 进件 board task → ack 销账
+              → 派工 → worker 跑 run（只读 brief）
        未命中 → 条目留待，不烧钱
 ```
 
-命令执行者是 herdr 侧（read/ack 是 agent 的动作）；flume 只搬运，daemon 只管货。
+命令执行者是 **coordinator**（read/进件/ack 三条动作归判断位）；flume 只搬运，daemon 只管货，worker 只干活。**inbox 只是入口，brief 才是记忆**——事件内容转录进 brief 后 inbox 即销账，记忆已落进三样之一（任务系统）。
 
 ### 完整运行态序列图
 
 ```plantuml
 @startuml
-title 运行态序列：一条 MR 事件到 agent 销账
+title 运行态：一条 MR 事件的一生（coordinator 收口）
 
-actor       "GitLab"             as GL
-participant "flume"              as FL
-participant "AgentInbox\ndaemon"  as AI
-participant "herdr 唤醒门"         as WG
-participant "herdr agent"        as AG
+actor       "GitLab"                as GL
+participant "flume"                 as FL
+participant "AgentInbox daemon"   as AI
+participant "herdr coordinator"   as CO
+database    "herdr-projects board" as BD
+participant "worker"                as WK
 
-== 事件搬运（纯传输，不许长出判断） ==
+== 1 事件搬运（纯传输，不许长出判断） ==
 
-GL -> FL : 1 webhook POST（MR opened）
+GL -> FL : webhook POST（MR opened）
 activate FL
-FL -> FL : 2 验签 · 归一 envelope
-FL -> AI : 3 POST /sources/{id}/events（native-id = 投递 UUID）
-activate AI
-AI -> AI : 4 去重 → 订阅匹配 → 落 inbox
-AI -> WG : 5 activation_only 唤醒（只带 entryId 指针）
-deactivate AI
+FL -> FL : 验签 · 归一 envelope
+FL -> AI : POST /sources/{id}/events
 deactivate FL
-
-== 判据分叉（唤醒 ≠ 授权） ==
-
-activate WG
-WG -> WG : 6 查等待表 wake_condition
-alt 未命中
-    WG -> WG : 条目留待，不烧钱
-else 命中
-    WG -> WG : 7 过授权门
-    WG -> AG : 8 开 turn（brief 只带 entryId）
-end
-deactivate WG
-
-== agent 干活（知识常驻，不是注入） ==
-
-activate AG
-note over AG
-  常驻知识（一次性接线）
-  AGENTS.md / skill：inbox read、ack --through
-  不用 --all；不注入、不随唤醒传递
-end note
-AG -> AI : 9 inbox read
 activate AI
-AI --> AG : 10 返回正文
+AI -> AI : 去重 · 订阅匹配 · 落 inbox
+AI -> CO : activation_only 唤醒（只带 entryId）
 deactivate AI
-AG -> AG : 11 干活
-AG -> AI : 12 ack --through（销账）
-deactivate AG
+
+== 2 判断与进件（coordinator 一把梭） ==
+
+activate CO
+CO -> CO : 查等待表 wake_condition
+alt 未命中
+  CO -> CO : 条目留待，不烧钱
+else 命中（过授权门）
+  CO -> AI : inbox read（取正文）
+  activate AI
+  AI --> CO : 事件内容
+  deactivate AI
+  CO -> BD : 进件 board task + brief（内容转录）
+  CO -> AI : ack --through（进件即销账）
+end
+deactivate CO
+
+== 3 正常 run 机械（worker 不知道 agentinbox 存在） ==
+
+BD -> WK : 派工（brief）
+activate WK
+WK -> WK : 执行 run（只读 brief）
+WK -> BD : 完成线 · 评审门 · 合并
+deactivate WK
+
+note right of CO
+  三条动作归 coordinator（AGENTS.md 一次接线）
+  worker 的世界里只有 brief
+end note
 
 @enduml
 ```
