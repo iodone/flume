@@ -79,6 +79,23 @@ flume 内部唯一事件形状，adapter 负责把各家 payload 折成它：
 | subject | 人可读对象定位，等待表判据用它对齐 |
 | payload | 供应商原始 payload，不裁剪 |
 
+## 4.5 知识接线：herdr 怎么知道要用 AgentInbox
+
+**答案：不注入。知识常驻，唤醒只传指针。**
+
+| 机制 | 内容 | 时机 |
+| :--- | :--- | :--- |
+| 常驻知识 | agentinbox 操作规程（read / ack --through / 不用 --all）写进 herdr 的 rules_file（AGENTS.md）或 skill | 一次性接线 |
+| 流动数据 | 事件指针（entryId / subject / summary） | 每次唤醒 |
+
+三条理由：
+
+1. **Runner 无记忆**：run 的唯一记忆是任务系统、代码库、编排器三样。唤醒时临时注入的操作指南不在这三样里 = 隐性知识，迟早丢
+2. **activation_only 契约**：唤醒 payload 里塞操作手册就变成「推内容」，唤醒 ≠ 授权的边界当场烂掉
+3. **知识与数据分家**：规程是常驻知识，事件是流动数据。混在一次注入里，知识要靠运气活到下一次 run
+
+开 turn 的 brief 最多带一个 `entryId` 数据指针——那是路由信息，不是说明书。
+
 ## 5. 技术形态
 
 ### 5.1 Node/TS 同生态
