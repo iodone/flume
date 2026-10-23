@@ -2,4 +2,5 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/../../.."
-PYTHONPATH=src python3 -m unittest discover -s test -v
+./node_modules/.bin/tsc --noEmit
+npm test
