@@ -8,7 +8,10 @@
 
 ```
 外部系统 ──webhook POST──▶ flume ──agentinbox source event──▶ AgentInbox
-                        验签·归一·喂入
+                        验签·归一·喂入                │
+                                                      │ activation_only
+                                                      ▼
+                                      flume /activation ──▶ herdr 唤醒门
 ```
 
 flume 做三件事，且只做三件事：
@@ -16,6 +19,10 @@ flume 做三件事，且只做三件事：
 1. **验签**：按 adapter 校验来源（GitLab 用 `X-Gitlab-Token`）
 2. **归一**：把各家 payload 折成统一的 envelope（`native_id` / `event` / `occurred_at` / `source` / `subject` / `payload`）
 3. **喂入**：调一次 `agentinbox source event`，把事件交给收件箱
+
+另有一条无状态旁路：AgentInbox 的 activation_only webhook 打到 flume `/activation`，
+flume 校验 `kind/newEntryCount/latestEntryId/summary` 后转发给 herdr 唤醒门。它不读、
+不转发 `entries` / `items`，也不决定要不要开 turn。
 
 ## 红线（与合同一致）
 
@@ -60,7 +67,8 @@ agentinbox source add <hst_id> events gitlab     # → src_...
 
 # 3. 注册 agent 并挂唤醒 target（activation_only）
 agentinbox agent register --agent-id <herdr-agent> \
-  --webhook-url http://<herdr唤醒门>
+  --webhook-url http://<flume>:9420/activation \
+  --webhook-activation-mode activation_only
 
 # 4. 订阅（agent 级过滤——source 共享，subscription 私有，别一个 PR 一个 source）
 agentinbox subscription add <src_id> --agent-id <herdr-agent>
@@ -73,6 +81,7 @@ cd projects/flume
 
 AGENTINBOX_SOURCE_ID=<src_id> \
 FLUME_GITLAB_TOKEN=<token> \
+FLUME_HERDR_WAKE_URL=http://<herdr唤醒门> \
 PYTHONPATH=src python3 -m flume
 # 默认 127.0.0.1:9420；给内网 GitLab 打时加 FLUME_BIND=0.0.0.0
 
@@ -101,7 +110,7 @@ pip install -e . && flume
 curl -X POST http://127.0.0.1:9420/gitlab -H "X-Gitlab-Token: $TOKEN" -d @sample-mr.json
 # 2. AgentInbox 看到
 agentinbox inbox read --agent-id <herdr-agent>
-# 3. 唤醒门被打到（activation_only，只叫醒不推正文）
+# 3. herdr 唤醒门收到 activation_only 的四个字段（只叫醒，不推正文）
 ```
 
 判据：inbox 出现 entry + 唤醒门收到 `kind: agentinbox.activation`。两条都到，链路才算通。
@@ -117,12 +126,15 @@ agentinbox inbox read --agent-id <herdr-agent>
 | `FLUME_BIND` | `127.0.0.1` | 部署给内网 GitLab 打时改 `0.0.0.0` |
 | `FLUME_PORT` | `9420` | 监听端口 |
 | `AGENTINBOX_BIN` | `agentinbox` | AgentInbox CLI 路径 |
+| `FLUME_HERDR_WAKE_URL` | 空 | herdr 唤醒门 HTTP(S) 地址；为空时 `/activation` 回 503 |
+| `FLUME_HERDR_WAKE_TIMEOUT` | `5` | 唤醒门请求超时（秒） |
 
 ## 端点
 
 | 方法 | 路径 | 结果 |
 | :--- | :--- | :--- |
 | `POST` | `/<adapter>`，如 `/gitlab` | `202 {"accepted":1}` 已喂入 · `400` 非 JSON / envelope 不合法 · `401` token 错 · `502` AgentInbox 没收下 · `413` body 超 8MB |
+| `POST` | `/activation` | `202 {"accepted":1}` 已唤醒 · `202 {"accepted":0}` 空激活 · `400` payload 不合法或带正文 · `502` 唤醒门失败 · `503` 未配置唤醒门 |
 | `GET` | `/healthz` | `200 {"ok":true}` |
 
 **不重试**：`502` 交给上游自己的投递重试；同一投递重试时 `native_id` 不变，AgentInbox 自动 dedupe。
@@ -208,7 +220,8 @@ adapter 只有两件事：**验签、折 envelope**。**不许排队、重试、
 cd projects/flume && python3 -m unittest discover -s test -v
 ```
 
-当前 23 个用例，含 gitlab normalize 纯函数、端到端冒烟、错误路径三类。
+当前 26 个用例，含 gitlab normalize 纯函数、端到端冒烟、错误路径，以及
+activation_only 唤醒门调用与等待表判据。
 
 ## 明确不做的事
 

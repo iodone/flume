@@ -11,6 +11,12 @@ from typing import Any, Callable, Mapping
 from urllib.parse import urlsplit
 
 from . import adapters
+from .activation import (
+    Activation,
+    ActivationError,
+    WakeGateError,
+    dispatch_activation,
+)
 from .envelope import EnvelopeError
 from .feed import FeedError, feed
 
@@ -30,6 +36,8 @@ class Config:
     source_id: str
     agentinbox_bin: str
     secrets: Mapping[str, str] = field(default_factory=dict)
+    wake_url: str | None = None
+    wake_timeout: float = 5.0
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "Config":
@@ -41,12 +49,20 @@ class Config:
         ]
         if missing:
             raise ConfigError("missing env: " + ", ".join(missing))
+        try:
+            wake_timeout = float(env.get("FLUME_HERDR_WAKE_TIMEOUT") or "5")
+        except ValueError as exc:
+            raise ConfigError("FLUME_HERDR_WAKE_TIMEOUT must be a number") from exc
+        if wake_timeout <= 0:
+            raise ConfigError("FLUME_HERDR_WAKE_TIMEOUT must be positive")
         return cls(
             bind=env.get("FLUME_BIND") or "127.0.0.1",
             port=int(env.get("FLUME_PORT") or "9420"),
             source_id=env["AGENTINBOX_SOURCE_ID"],
             agentinbox_bin=env.get("AGENTINBOX_BIN") or "agentinbox",
             secrets={m.NAME: env[m.SECRET_ENV] for m in adapters.all()},
+            wake_url=(env.get("FLUME_HERDR_WAKE_URL") or "").strip() or None,
+            wake_timeout=wake_timeout,
         )
 
 
@@ -75,21 +91,21 @@ class Handler(BaseHTTPRequestHandler):
             self._reply(404, {"error": "not found"})
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib naming
-        name = urlsplit(self.path).path.strip("/")
+        path = urlsplit(self.path).path.strip("/")
+        if path == "activation":
+            self._handle_activation()
+            return
+
+        name = path
         adapter = adapters.get(name)
         if adapter is None:
             # Body left unread: close so the next request is not parsed out of it.
             self._reply(404, {"error": f"unknown adapter: {name or '/'}"}, close=True)
             return
 
-        length = int(self.headers.get("Content-Length") or 0)
-        if length <= 0:
-            self._reply(400, {"error": "empty body"})
+        body = self._read_body()
+        if body is None:
             return
-        if length > MAX_BODY_BYTES:
-            self._reply(413, {"error": "body too large"}, close=True)
-            return
-        body = self.rfile.read(length)
 
         secret = self.server.cfg.secrets.get(adapter.NAME)
         if not adapter.verify(self.headers, body, secret):
@@ -131,6 +147,64 @@ class Handler(BaseHTTPRequestHandler):
             envelope.native_id,
         )
         self._reply(202, {"accepted": 1})
+
+    def _handle_activation(self) -> None:
+        body = self._read_body()
+        if body is None:
+            return
+
+        try:
+            document = json.loads(body)
+        except (UnicodeDecodeError, ValueError):
+            self._reply(400, {"error": "invalid json"})
+            return
+        if not isinstance(document, dict):
+            self._reply(400, {"error": "payload must be a JSON object"})
+            return
+
+        try:
+            activation = Activation.from_document(document)
+        except ActivationError as exc:
+            self._reply(400, {"error": str(exc)})
+            return
+
+        if not activation.wait_condition().should_wake:
+            self._reply(202, {"accepted": 0})
+            return
+
+        wake_url = self.server.cfg.wake_url
+        if not wake_url:
+            log.error("activation rejected: FLUME_HERDR_WAKE_URL is not set")
+            self._reply(503, {"error": "wake gate not configured"})
+            return
+
+        try:
+            dispatch_activation(
+                wake_url,
+                activation,
+                timeout=self.server.cfg.wake_timeout,
+            )
+        except WakeGateError as exc:
+            log.error("wake gate failed: %s", exc)
+            self._reply(502, {"error": "wake gate failed"})
+            return
+
+        log.info(
+            "woke herdr new_entry_count=%s latest_entry_id=%s",
+            activation.new_entry_count,
+            activation.latest_entry_id,
+        )
+        self._reply(202, {"accepted": 1})
+
+    def _read_body(self) -> bytes | None:
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0:
+            self._reply(400, {"error": "empty body"})
+            return None
+        if length > MAX_BODY_BYTES:
+            self._reply(413, {"error": "body too large"}, close=True)
+            return None
+        return self.rfile.read(length)
 
     def _reply(self, status: int, body: dict[str, Any], close: bool = False) -> None:
         raw = json.dumps(body, ensure_ascii=False).encode("utf-8")
