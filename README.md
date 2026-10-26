@@ -33,15 +33,11 @@ flume 只做四件事：**验签**、**归一**、**喂入 AgentInbox**、**转�
 Node.js 版本与 `@holon-run/agentinbox` 保持一致：
 `^22.23.4 || ^24.22.1 || >=26.12.1`。Node.js 23.x / 25.x 不在依赖声明的支持范围内。
 
-从仓库根目录安装到稳定路径 `~/Applications/flume`：
+从仓库根目录安装为全局 `flume` 命令：
 
 ```bash
-mkdir -p "$HOME/Applications/flume" "$HOME/.local/bin"
-rsync -a --delete --exclude '.git' --exclude 'node_modules' --exclude 'dist' ./ "$HOME/Applications/flume/"
-(cd "$HOME/Applications/flume" && npm ci && npm run build)
-printf '%s\n' '#!/bin/sh' 'exec node "$HOME/Applications/flume/dist/src/cli.js" "$@"' > "$HOME/.local/bin/flume"
-chmod +x "$HOME/.local/bin/flume"
-export PATH="$HOME/.local/bin:$HOME/Applications/flume/node_modules/.bin:$PATH"
+npm ci          # 安装 devDependencies；prepack 的 tsc 要用
+npm i -g .      # 安装为全局 flume 命令
 flume --help
 ```
 
@@ -52,8 +48,10 @@ Usage: flume start
 ```
 
 当前仓库尚未发布，不要用 `npm install -g flume` 安装，否则会拿到 npm 上的同名包。
-需要登录常驻时，运行 `./scripts/install-launchd.sh`；Keychain、状态、日志、重启和卸载见
-[USAGE 的常驻安装一节](docs/USAGE.md#常驻安装launchd)。
+如果全局 bin 不在 `PATH`，用 `npm prefix -g` 查看前缀后将其加入 `PATH`；也可改用
+`npm i -g . --prefix "$HOME/.local"`，命令会装到 `~/.local/bin/flume`。
+需要登录常驻时，按
+[USAGE 的常驻安装一节](docs/USAGE.md#常驻安装launchd)配置 LaunchAgent。
 
 ## 快速启动
 

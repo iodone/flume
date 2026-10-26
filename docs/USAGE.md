@@ -16,10 +16,8 @@ Node.js 版本与 `@holon-run/agentinbox` 保持一致：
 ### 1. 安装并确认 CLI
 
 ```bash
-npm install --silent
-npm run build --silent
-npm link --silent
-export PATH="$PWD/node_modules/.bin:$PATH"
+npm ci
+npm i -g .
 flume --help
 ```
 
@@ -29,8 +27,8 @@ flume --help
 Usage: flume start
 ```
 
-仓库开发时使用上面的本地安装；`npm install -g flume` 供包发布后使用，安装后同样是
-`flume start` 这一条入口。当前仓库尚未发布，直接用全局安装会拿到 npm 上的同名包。
+安装后统一使用 `flume start` 这一条入口。当前仓库尚未发布，不要用
+`npm install -g flume` 按包名安装，否则会拿到 npm 上的同名包。
 
 ### 2. 设置两个必填环境变量
 
@@ -492,13 +490,13 @@ flume: listening on 127.0.0.1:9420; agentinbox attached at /Users/mi/.agentinbox
 
 ## 常驻安装（launchd）
 
-生产运行不依赖当前 checkout、shell 会话或 `/private/tmp`。安装器从当前 `main`
-checkout 构建一份稳定副本，AgentInbox daemon 与 flume 各由一个 LaunchAgent 管理，
+生产运行不依赖当前 checkout、shell 会话或 `/private/tmp`。flume 通过 npm 全局安装，
+launchd 直接调用全局命令；AgentInbox daemon 与 flume 各由一个 LaunchAgent 管理，
 二者可以独立重启。
 
 | 项 | 固定位置 / 值 |
 | :--- | :--- |
-| flume 安装 | `~/Applications/flume` |
+| flume 命令 | `/opt/homebrew/bin/flume` |
 | flume 配置 | `~/.config/flume` |
 | 日志 | `~/Library/Logs/flume` |
 | AgentInbox 状态 | `~/.agentinbox`（沿用现有 source / inbox） |
@@ -509,23 +507,31 @@ checkout 构建一份稳定副本，AgentInbox daemon 与 flume 各由一个 Lau
 
 ### 安装与启动
 
-先更新到 `main`，再执行：
+在仓库根目录执行：
 
 ```bash
-./scripts/install-launchd.sh
+npm ci
+npm i -g .
 ```
 
-安装器依次执行 `npm ci`、`npm run build`，写入两个 plist，然后先启动
-AgentInbox、等 socket 可用，再启动 flume。首次迁移时如果旧的手工进程仍占用
-`19420` 或 `~/.agentinbox/agentinbox.sock`，先用 `--no-start` 只完成构建和
-plist 写入，按自己的维护窗口切换：
+升级时在同一目录重跑 `npm i -g .`，再重启 flume job 让 launchd 加载新版本。
 
-```bash
-./scripts/install-launchd.sh --no-start
+flume 的 LaunchAgent 以全局命令启动：
+
+```xml
+<key>ProgramArguments</key>
+<array>
+  <string>/opt/homebrew/bin/flume</string>
+  <string>start</string>
+</array>
 ```
+
+不要写成 `node dist/src/cli.js start`。plist 也不需要
+`WorkingDirectory`：flume 不读取相对于 cwd 的路径，状态、配置和日志都由 `HOME`
+或显式的绝对路径确定。
 
 两个 LaunchAgent 都设置了 `RunAtLoad`、`KeepAlive`、`ThrottleInterval=10`，
-主进程退出或被杀后由 launchd 自动拉起。wake gate 是既有的独立 job，本安装器
+主进程退出或被杀后由 launchd 自动拉起。wake gate 是既有的独立 job，这套配置
 不接管它；不要把 wake gate 与 flume 合并成一个 job，它们是独立故障域。
 
 flume 的 plist 还固定传入 `FLUME_AGENTINBOX_AUTOSTART=0`。因此 launchd 模式下
@@ -542,7 +548,7 @@ Keychain 是 token 的人工维护源，条目为：
 service=flume-gitlab-webhook account=flume
 ```
 
-安装器用 `security find-generic-password` 读取一次，写入权限 `600` 的
+部署时用 `security find-generic-password` 读取一次，写入权限 `600` 的
 `~/.config/flume/flume.env`。LaunchAgent 只传这个文件路径
 （`FLUME_ENV_FILE`）；flume 在进程内读取，不 `source` 文件，也不把 token
 写入 plist、命令行或继承环境。选择 600 文件而不是在每次启动时由 shell 导出
@@ -607,7 +613,7 @@ launchctl bootout "gui/$(id -u)" com.xiaomi.flume.wakegate 2>/dev/null || true
 rm ~/Library/LaunchAgents/com.xiaomi.flume.gitlab.plist
 rm ~/Library/LaunchAgents/com.xiaomi.flume.agentinbox.plist
 rm ~/Library/LaunchAgents/com.xiaomi.flume.wakegate.plist
-rm -rf ~/Applications/flume
+npm uninstall -g flume
 rm ~/.config/flume/flume.env
 ```
 
