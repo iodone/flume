@@ -14,6 +14,7 @@ import {
   localAddress,
   type Config,
 } from "./core.js";
+import { environmentWithOptionalFile } from "./env.js";
 import { agentInboxSocketPath, resolveAgentInboxBin } from "./feed.js";
 
 const DAEMON_START_TIMEOUT_MS = 15_000;
@@ -22,6 +23,11 @@ const DAEMON_POLL_MS = 100;
 interface Daemon {
   socketPath: string;
   child: ChildProcess | null;
+}
+
+export interface EnsureAgentInboxOptions {
+  autostart?: boolean;
+  timeoutMs?: number;
 }
 
 export async function main(
@@ -39,8 +45,10 @@ export async function main(
   }
 
   let config: Config;
+  let runtimeEnv: NodeJS.ProcessEnv;
   try {
-    config = configFromEnv(env);
+    runtimeEnv = await environmentWithOptionalFile(env);
+    config = configFromEnv(runtimeEnv);
   } catch (error) {
     const message = error instanceof ConfigError ? error.message : String(error);
     process.stderr.write(`flume: ${message}\n`);
@@ -49,7 +57,7 @@ export async function main(
 
   let daemon: Daemon | null = null;
   try {
-    daemon = await ensureAgentInbox(env);
+    daemon = await ensureAgentInbox(daemonEnvironment(runtimeEnv));
     const server = createFlumeServer(config);
     await listen(server, config);
     const address = localAddress(server);
@@ -69,10 +77,26 @@ export async function main(
 
 export async function ensureAgentInbox(
   env: NodeJS.ProcessEnv = process.env,
+  options: EnsureAgentInboxOptions = {},
 ): Promise<Daemon> {
   const socketPath = agentInboxSocketPath(env);
   if (await socketIsAlive(socketPath)) {
     return { socketPath, child: null };
+  }
+
+  const timeoutMs = options.timeoutMs ?? DAEMON_START_TIMEOUT_MS;
+  const autostart = options.autostart ?? env.FLUME_AGENTINBOX_AUTOSTART !== "0";
+  if (!autostart) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      await sleep(DAEMON_POLL_MS);
+      if (await socketIsAlive(socketPath)) {
+        return { socketPath, child: null };
+      }
+    }
+    throw new Error(
+      `agentinbox is not running at ${socketPath}; FLUME_AGENTINBOX_AUTOSTART=0`,
+    );
   }
 
   await mkdir(path.dirname(socketPath), { recursive: true, mode: 0o700 });
@@ -90,7 +114,7 @@ export async function ensureAgentInbox(
     spawnError = error;
   });
 
-  const deadline = Date.now() + DAEMON_START_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (await socketIsAlive(socketPath)) {
       return { socketPath, child };
@@ -112,7 +136,13 @@ export async function ensureAgentInbox(
 
   child.kill("SIGTERM");
   throw new Error(
-    `agentinbox did not open ${socketPath} within ${DAEMON_START_TIMEOUT_MS}ms`,
+    `agentinbox did not open ${socketPath} within ${timeoutMs}ms`,
+  );
+}
+
+function daemonEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(env).filter(([key]) => !/^FLUME_.*_TOKEN$/.test(key)),
   );
 }
 
