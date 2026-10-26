@@ -298,10 +298,160 @@ done
 | :--- | :--- |
 | URL | flume 所在机器的内网地址加 `/gitlab`，端口默认 `9420` |
 | Secret token | 与 `FLUME_GITLAB_TOKEN` 完全一致 |
-| Trigger | Merge request / Pipeline / Comment / Push |
-| SSL verification | 内网 HTTP 可按部署环境关闭 |
+| Trigger | Merge request events / Pipeline events / Comments / Issues / Push events |
+| SSL verification | URL 是 HTTP 时关闭；这是明文 HTTP 的唯一正确设置 |
 
 本机 curl 使用 `127.0.0.1`；GitLab 在另一台机器时，Webhook URL 必须使用 GitLab 能访问到的 flume 内网地址。
+
+### 5.1 接内网 GitLab（git.n.xiaomi.com）
+
+> 状态（2026-10-26）：`olap/miergo` 的项目级 webhook 已接入真实
+> `git.n.xiaomi.com` 事件。MR、评论、分支推送和流水线事件均已完成端到端验证；
+> 不再依赖 WVR 定时巡检来发现这些事件。
+
+撤除步骤见 [`docs/REMOVAL.md`](docs/REMOVAL.md)。
+
+本次试点部署在一个没有反向代理的内网 macOS 工作机上。GitLab 直接访问 flume：
+
+| 项 | 实际值 |
+| :--- | :--- |
+| flume 主机 | `mideMacBook-Pro.local` |
+| 内网地址 | `10.224.202.16` |
+| 监听 | `0.0.0.0:19420` |
+| health | `http://10.224.202.16:19420/healthz` |
+| Webhook URL | `http://10.224.202.16:19420/gitlab` |
+| AgentInbox activation target | `http://127.0.0.1:19420/activation` |
+| herdr 唤醒门 | `http://127.0.0.1:18924/wake` |
+
+本机默认端口 `9420` 被一个更早的 Python 版 flume 占用，所以这次部署显式使用
+`FLUME_PORT=19420`。端口不是协议的一部分，只要 GitLab Webhook URL、flume 和
+AgentInbox activation target 三处一致即可。干净机器上可继续使用默认 `9420`。
+
+**可达性是前置条件，不是配完 webhook 再排查的细节。** URL 不能写
+`127.0.0.1` 或 `localhost`，因为请求由 `git.n.xiaomi.com` 发出。当前部署满足：
+
+1. flume 监听 `0.0.0.0`，而不是只监听 loopback。
+2. 本机防火墙未拦截 Node 入站连接。
+3. GitLab 与本机内网路由互通。
+4. 已用 GitLab 的 Webhook Test 和真实 MR/Note/Push/Pipeline 事件验证，而不是只在本机
+   curl `10.x` 地址自证。
+
+启动命令形状如下。`FLUME_GITLAB_TOKEN` 只从环境或系统钥匙串注入，不落仓库：
+
+```bash
+export FLUME_BIND=0.0.0.0
+export FLUME_PORT=19420
+export FLUME_HERDR_WAKE_URL=http://127.0.0.1:18924/wake
+export AGENTINBOX_SOURCE_ID=src_...
+export FLUME_GITLAB_TOKEN="$(security find-generic-password \
+  -a flume -s flume-gitlab-webhook -w)"
+flume start
+```
+
+启动后从另一台内网机器或 GitLab Webhook Test 验证 `healthz`。如果 GitLab 显示
+`Connection refused`，先检查 `FLUME_BIND`、端口、主机防火墙和路由，不要改 token
+掩盖网络错误；如果显示 `401`，才是 token 不一致。
+
+本次常驻由两个用户级 LaunchAgent 负责：
+`com.xiaomi.flume.gitlab` 启动 flume，
+`com.xiaomi.flume.wakegate` 启动本机 herdr 唤醒门。可以这样检查：
+
+```bash
+launchctl print "gui/$(id -u)/com.xiaomi.flume.gitlab" | grep -E 'state =|pid ='
+launchctl print "gui/$(id -u)/com.xiaomi.flume.wakegate" | grep -E 'state =|pid ='
+```
+
+flume 即使监听 `0.0.0.0`，`POST /activation` 也只接受 loopback 来源；内网请求返回
+`403 {"error":"activation is loopback-only"}`。不要把 `/activation` 暴露到反向代理。
+唤醒门只把经过校验的数值 `newEntryCount` 放进 herdr prompt，`latestEntryId` 和
+`summary` 仍保留在 flume/wake-gate 日志中，但不会作为 prompt 文本执行。
+
+#### 项目级 webhook
+
+只给 `olap/miergo` 建项目级 webhook，本次不改 group 级配置：
+
+1. 打开 `https://git.n.xiaomi.com/olap/miergo/-/hooks`，选择 **Add new webhook**。
+2. URL 填 `http://10.224.202.16:19420/gitlab`。
+3. Secret token 填当前运行 flume 的 `FLUME_GITLAB_TOKEN`。
+4. 勾选以下五类，名称与 GitLab API 字段对应：
+
+   | GitLab 界面 | API 字段 |
+   | :--- | :--- |
+   | Merge request events | `merge_requests_events` |
+   | Pipeline events | `pipeline_events` |
+   | Comments | `note_events` |
+   | Issues | `issues_events` |
+   | Push events | `push_events` |
+
+5. 把 **SSL verification** 关闭。这里的 URL 是明文 HTTP，没有 TLS 握手可校验；
+   开着这个开关不会让 HTTP 变安全，只会误导排错。生产化时应改为 HTTPS 反代，并重新开启。
+6. 保存后点 **Test → Merge request events**。GitLab 应收到 `2xx`，flume 日志出现
+   `accepted event=merge_request...`，AgentInbox 对应 source 的 stream event 数增加。
+
+API 等价配置（token 用当前环境变量，不写进命令历史）：
+
+```bash
+glab api --hostname git.n.xiaomi.com --method POST \
+  projects/262378/hooks \
+  --field url=http://10.224.202.16:19420/gitlab \
+  --field token="$FLUME_GITLAB_TOKEN" \
+  --field merge_requests_events=true \
+  --field pipeline_events=true \
+  --field note_events=true \
+  --field issues_events=true \
+  --field push_events=true \
+  --field enable_ssl_verification=false
+```
+
+检查配置（API 不会回显 token；以一条真实投递返回 `202` 证明 Secret 一致）：
+
+```bash
+glab api --hostname git.n.xiaomi.com projects/262378/hooks |
+  jq '.[] | {id,url,merge_requests_events,pipeline_events,note_events,issues_events,push_events,enable_ssl_verification}'
+```
+
+`202 {"accepted":1}` 表示 flume 已把事件交给 AgentInbox，不表示每个 UUID 都新建了
+stream event。同一 GitLab 投递 UUID 重投时 flume 仍返回 `202`，但 AgentInbox 的
+`(stream_id, source_native_id, event_variant)` 唯一约束会拒绝重复落库。
+
+#### token 生成与轮换
+
+生成 32 字节强随机 token，并只在环境变量和系统钥匙串中使用：
+
+```bash
+export FLUME_GITLAB_TOKEN="$(openssl rand -hex 32)"
+security add-generic-password -U \
+  -a flume -s flume-gitlab-webhook -w "$FLUME_GITLAB_TOKEN"
+unset FLUME_GITLAB_TOKEN
+```
+
+不要在仓库、shell 历史、README、工单或聊天里保存 token 明文。不要把 token 放在 URL
+查询参数里；flume 只认 `X-Gitlab-Token` 请求头。
+
+轮换时：
+
+1. 生成新 token，更新环境/钥匙串。
+2. 在同一个维护窗口内更新 GitLab webhook 的 Secret token，并重启 flume。
+3. 点击 Webhook Test，确认恢复 `202`；轮换窗口内 GitLab 收到 `401` 会按自己的投递策略重试。
+4. 旧 token 不再被任何进程或 hook 使用后，从钥匙串删除旧条目。
+
+GitLab 的 webhook 编辑页在 URL 变化时可能要求重新填写 Secret token；改 URL 后务必重新保存
+同一 token，否则下一次投递就是 `401`。flume 不重试事件；非 `2xx` 交给 GitLab/AgentInbox
+各自的投递机制重试。
+
+#### 内网接入排错
+
+| 现象 | 原因 | 处理 |
+| :--- | :--- | :--- |
+| GitLab 显示 `Connection refused` | flume 没监听、只绑 `127.0.0.1`、端口写错或路由/防火墙阻断 | 用 `lsof -nP -iTCP:19420 -sTCP:LISTEN` 和 GitLab Test 核对 |
+| GitLab Test 超时 | GitLab 到 flume 主机没有可达路由 | 换到 GitLab 可达的内网主机，或加受控反代；不要改绑定地址糊过去 |
+| 返回 `401 {"error":"invalid token"}` | hook Secret 与运行中 `FLUME_GITLAB_TOKEN` 不一致，或改 URL 后 token 被清空 | 重新保存一致 token，重启 flume 后再测 |
+| 返回 `502 {"error":"feed failed"}` | `AGENTINBOX_SOURCE_ID` 不存在或 AgentInbox 拒收 | `agentinbox source show "$AGENTINBOX_SOURCE_ID"`；flume 不自行重试 |
+| 返回 `413 {"error":"body too large"}` | 请求体超过 8 MiB | 检查是否误把大文件/错误代理请求发给 `/gitlab` |
+| 返回 `403 {"error":"activation is loopback-only"}` | 从非 loopback 地址访问了 AgentInbox 内部回调 | 让 AgentInbox target 直连 `127.0.0.1`；不要反代 `/activation` |
+| 返回 `202` 但 inbox 为空 | source 没有订阅给目标 agent，或订阅从 `latest` 开始 | 检查 `agentinbox subscription` 与 `agentinbox agent target list` |
+| inbox 有条目但 herdr 没醒 | activation target 或 `FLUME_HERDR_WAKE_URL` 不通 | 检查 target URL、flume `/activation` 日志与唤醒门日志 |
+| inbox 有条目但 herdr 暂时没醒，且 `activationDispatchStates.status=dirty` | AgentInbox 的 `notifyLeaseMs`（默认 600000 ms）正在合并唤醒，`leaseExpiresAt` 前不会再次投递 | 这是防刷屏合并，不是丢事件；需要逐事件唤醒时调小 target 的 `notify-lease-ms` |
 
 ### 6. 接 herdr 唤醒门
 

@@ -112,6 +112,14 @@ async function handleRequest(
   }
 
   if (pathname === "activation") {
+    if (!isLoopbackAddress(request.socket.remoteAddress)) {
+      request.resume();
+      console.error(
+        `flume: reject activation from non-loopback ${request.socket.remoteAddress ?? "unknown"}`,
+      );
+      sendJson(response, 403, { error: "activation is loopback-only" }, true);
+      return;
+    }
     await handleActivation(config, request, response);
     return;
   }
@@ -185,7 +193,20 @@ async function handleRequest(
     return;
   }
 
+  console.log(
+    `flume: accepted event=${envelope.event} native_id=${envelope.native_id} subject=${envelope.subject}`,
+  );
   sendJson(response, 202, { accepted: 1 });
+}
+
+export function isLoopbackAddress(address: string | undefined): boolean {
+  if (!address) {
+    return false;
+  }
+  const normalized = address.toLowerCase().startsWith("::ffff:")
+    ? address.slice("::ffff:".length)
+    : address;
+  return normalized === "::1" || normalized.startsWith("127.");
 }
 
 async function handleActivation(

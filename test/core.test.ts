@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   MAX_BODY_BYTES,
   createFlumeServer,
+  isLoopbackAddress,
   type Config,
   type FeedFunction,
 } from "../src/core.js";
@@ -186,6 +187,16 @@ test("rejects bodies over 8MB with 413", async () => {
     await close(server);
   }
   assert.equal(called, false);
+});
+
+test("recognizes only loopback addresses", () => {
+  assert.equal(isLoopbackAddress("127.0.0.1"), true);
+  assert.equal(isLoopbackAddress("127.2.3.4"), true);
+  assert.equal(isLoopbackAddress("::1"), true);
+  assert.equal(isLoopbackAddress("::ffff:127.0.0.1"), true);
+  assert.equal(isLoopbackAddress("10.224.202.16"), false);
+  assert.equal(isLoopbackAddress("::ffff:10.224.202.16"), false);
+  assert.equal(isLoopbackAddress(undefined), false);
 });
 
 function listen(server: Server): Promise<void> {
