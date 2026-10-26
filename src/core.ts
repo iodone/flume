@@ -185,6 +185,9 @@ async function handleRequest(
     return;
   }
 
+  console.log(
+    `flume: accepted event=${envelope.event} native_id=${envelope.native_id} subject=${envelope.subject}`,
+  );
   sendJson(response, 202, { accepted: 1 });
 }
 

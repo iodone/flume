@@ -256,16 +256,26 @@ source 共享、subscription 私有——别一个 PR 一个 source。
 
 ## 7. 落地路径
 
-### 阶段一：核心通道（先把 GitLab 打通）
+### 阶段一：核心通道（已接真实事件）
+
+**状态：已接真实事件（2026-10-26）。** `git.n.xiaomi.com/olap/miergo`
+的项目级 webhook 已直接投递到内网 flume。真实 MR、评论、Push 与 Pipeline
+事件均走通 `GitLab → flume → AgentInbox → 唤醒门 → herdr`；同一 GitLab
+投递 UUID 重投只保留一个 stream event。项目级 Webhook 的五个开关、token
+轮换、可达性检查和撤除步骤见 [`README.md`](../README.md) 与
+[`REMOVAL.md`](REMOVAL.md)。
 
 - envelope + gitlab adapter（验签 / 归一 / native_id 稳定性）
 - feed 打通 unix socket HTTP（CLI 后备）
 - 单一入口 flume start（ensure ≠ own）
 - activation_only 转发：`POST /activation` 校验四字段并调用 herdr 唤醒门
 - 等待表判据合同：`newEntryCount` 决定是否唤醒，`latestEntryId` 决定何时完成
-- 端到端验收：假 MR 事件 → 202 → inbox entry → activation → 唤醒门命中
+- 端到端验收：真实 GitLab 事件 → 202 → inbox entry → activation → 真实 herdr 唤醒
 
 ### 阶段二：接 herdr（唤醒变决策）
+
+**状态：进行中 / 未完成。** 当前试点已证明 activation 能真正唤起 herdr
+coordinator，但“按 subject / event 对齐具体等待项”和授权门仍不是阶段一的交付。
 
 - herdr 侧消费等待表合同，并按 subject / event 对齐具体等待项
 - 授权门落位：唤醒 ≠ 授权的运行时体现
