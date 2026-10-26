@@ -2,5 +2,6 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/../../.."
-./node_modules/.bin/tsc --noEmit
+npm run lint
 npm test
+npm run smoke

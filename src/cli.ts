@@ -2,7 +2,9 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { realpathSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
 import net from "node:net";
+import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
@@ -73,6 +75,7 @@ export async function ensureAgentInbox(
     return { socketPath, child: null };
   }
 
+  await mkdir(path.dirname(socketPath), { recursive: true, mode: 0o700 });
   const bin = resolveAgentInboxBin();
   const child = spawn(bin, ["serve"], {
     env,
