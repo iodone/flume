@@ -445,6 +445,7 @@ GitLab 的 webhook 编辑页在 URL 变化时可能要求重新填写 Secret tok
 | 返回 `413 {"error":"body too large"}` | 请求体超过 8 MiB | 检查是否误把大文件/错误代理请求发给 `/gitlab` |
 | 返回 `202` 但 inbox 为空 | source 没有订阅给目标 agent，或订阅从 `latest` 开始 | 检查 `agentinbox subscription` 与 `agentinbox agent target list` |
 | inbox 有条目但 herdr 没醒 | activation target 或 `FLUME_HERDR_WAKE_URL` 不通 | 检查 target URL、flume `/activation` 日志与唤醒门日志 |
+| inbox 有条目但 herdr 暂时没醒，且 `activationDispatchStates.status=dirty` | AgentInbox 的 `notifyLeaseMs`（默认 600000 ms）正在合并唤醒，`leaseExpiresAt` 前不会再次投递 | 这是防刷屏合并，不是丢事件；需要逐事件唤醒时调小 target 的 `notify-lease-ms` |
 
 ### 6. 接 herdr 唤醒门
 
