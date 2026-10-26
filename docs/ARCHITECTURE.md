@@ -269,6 +269,7 @@ source 共享、subscription 私有——别一个 PR 一个 source。
 - feed 打通 unix socket HTTP（CLI 后备）
 - 单一入口 flume start（ensure ≠ own）
 - activation_only 转发：`POST /activation` 校验四字段并调用 herdr 唤醒门
+- `/activation` 只接受 loopback 来源；唤醒门 prompt 不含调用方可控的 summary/latestEntryId
 - 等待表判据合同：`newEntryCount` 决定是否唤醒，`latestEntryId` 决定何时完成
 - 端到端验收：真实 GitLab 事件 → 202 → inbox entry → activation → 真实 herdr 唤醒
 

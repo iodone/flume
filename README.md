@@ -361,6 +361,11 @@ launchctl print "gui/$(id -u)/com.xiaomi.flume.gitlab" | grep -E 'state =|pid ='
 launchctl print "gui/$(id -u)/com.xiaomi.flume.wakegate" | grep -E 'state =|pid ='
 ```
 
+flume 即使监听 `0.0.0.0`，`POST /activation` 也只接受 loopback 来源；内网请求返回
+`403 {"error":"activation is loopback-only"}`。不要把 `/activation` 暴露到反向代理。
+唤醒门只把经过校验的数值 `newEntryCount` 放进 herdr prompt，`latestEntryId` 和
+`summary` 仍保留在 flume/wake-gate 日志中，但不会作为 prompt 文本执行。
+
 #### 项目级 webhook
 
 只给 `olap/miergo` 建项目级 webhook，本次不改 group 级配置：
@@ -443,6 +448,7 @@ GitLab 的 webhook 编辑页在 URL 变化时可能要求重新填写 Secret tok
 | 返回 `401 {"error":"invalid token"}` | hook Secret 与运行中 `FLUME_GITLAB_TOKEN` 不一致，或改 URL 后 token 被清空 | 重新保存一致 token，重启 flume 后再测 |
 | 返回 `502 {"error":"feed failed"}` | `AGENTINBOX_SOURCE_ID` 不存在或 AgentInbox 拒收 | `agentinbox source show "$AGENTINBOX_SOURCE_ID"`；flume 不自行重试 |
 | 返回 `413 {"error":"body too large"}` | 请求体超过 8 MiB | 检查是否误把大文件/错误代理请求发给 `/gitlab` |
+| 返回 `403 {"error":"activation is loopback-only"}` | 从非 loopback 地址访问了 AgentInbox 内部回调 | 让 AgentInbox target 直连 `127.0.0.1`；不要反代 `/activation` |
 | 返回 `202` 但 inbox 为空 | source 没有订阅给目标 agent，或订阅从 `latest` 开始 | 检查 `agentinbox subscription` 与 `agentinbox agent target list` |
 | inbox 有条目但 herdr 没醒 | activation target 或 `FLUME_HERDR_WAKE_URL` 不通 | 检查 target URL、flume `/activation` 日志与唤醒门日志 |
 | inbox 有条目但 herdr 暂时没醒，且 `activationDispatchStates.status=dirty` | AgentInbox 的 `notifyLeaseMs`（默认 600000 ms）正在合并唤醒，`leaseExpiresAt` 前不会再次投递 | 这是防刷屏合并，不是丢事件；需要逐事件唤醒时调小 target 的 `notify-lease-ms` |
