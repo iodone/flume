@@ -196,7 +196,8 @@ AgentInbox 的 npm 包只有 bin（CLI/daemon 入口），没有可 import 的�
 ```
 1. 探 ~/.agentinbox/agentinbox.sock
    ├─ 活着 → attach，不碰它的生命周期
-   └─ 没有 → spawn `agentinbox serve` 子进程，own 它
+   └─ 没有 → 默认 spawn `agentinbox serve` 子进程，own 它
+             常驻态（FLUME_AGENTINBOX_AUTOSTART=0）→ 等待独立 daemon，超时退出
 2. 开 webhook 门（FLUME_BIND:FLUME_PORT）
 3. 退出只收自己 spawn 的子进程
 ```
@@ -204,8 +205,11 @@ AgentInbox 的 npm 包只有 bin（CLI/daemon 入口），没有可 import 的�
 **ensure ≠ own**：daemon 是共享基础设施，codex / claude / herdr 都可能是它的租户。确保活着是服务，占有生命周期是越权。
 
 生产态不把 daemon 放在 flume 子进程里：AgentInbox 与 flume 是两个用户级
-LaunchAgent，flume 启动时只会 attach 已有 socket。这样 AgentInbox 崩了由自己的
-`KeepAlive` 拉起，flume 崩了也只重启 flume，不存在“谁是谁的子进程”生命周期耦合。
+LaunchAgent，flume 的 plist 设置 `FLUME_AGENTINBOX_AUTOSTART=0`，启动时只会
+等待并 attach 已有 socket，绝不 spawn daemon。启动顺序因此不影响所有权：
+AgentInbox 尚未就绪时 flume 最多等 15 秒，超时由 `KeepAlive` 再试。这样
+AgentInbox 崩了由自己的 `KeepAlive` 拉起，flume 崩了也只重启 flume，不存在
+“谁是谁的子进程”生命周期耦合。
 
 ### 5.3 feed：唯一接缝
 
@@ -381,6 +385,7 @@ SECRET_ENV 自动进必填名单，缺了直接 exit 2，不带病启动。
 | FLUME_HERDR_WAKE_URL | 未配置 | herdr 唤醒门的绝对 HTTP(S) URL |
 | FLUME_HERDR_WAKE_TIMEOUT | 5 | 唤醒门调用超时，单位秒 |
 | FLUME_ENV_FILE | 未配置 | 可选；读取权限必须为 600 的 KEY=value 文件 |
+| FLUME_AGENTINBOX_AUTOSTART | 1 | 0 时只等待并 attach 独立 daemon，不自举 |
 
 token 不进仓库、plist、argv、继承环境、日志或响应体。
 

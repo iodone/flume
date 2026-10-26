@@ -25,6 +25,11 @@ interface Daemon {
   child: ChildProcess | null;
 }
 
+export interface EnsureAgentInboxOptions {
+  autostart?: boolean;
+  timeoutMs?: number;
+}
+
 export async function main(
   argv: string[] = process.argv.slice(2),
   env: NodeJS.ProcessEnv = process.env,
@@ -72,10 +77,26 @@ export async function main(
 
 export async function ensureAgentInbox(
   env: NodeJS.ProcessEnv = process.env,
+  options: EnsureAgentInboxOptions = {},
 ): Promise<Daemon> {
   const socketPath = agentInboxSocketPath(env);
   if (await socketIsAlive(socketPath)) {
     return { socketPath, child: null };
+  }
+
+  const timeoutMs = options.timeoutMs ?? DAEMON_START_TIMEOUT_MS;
+  const autostart = options.autostart ?? env.FLUME_AGENTINBOX_AUTOSTART !== "0";
+  if (!autostart) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      await sleep(DAEMON_POLL_MS);
+      if (await socketIsAlive(socketPath)) {
+        return { socketPath, child: null };
+      }
+    }
+    throw new Error(
+      `agentinbox is not running at ${socketPath}; FLUME_AGENTINBOX_AUTOSTART=0`,
+    );
   }
 
   await mkdir(path.dirname(socketPath), { recursive: true, mode: 0o700 });
@@ -93,7 +114,7 @@ export async function ensureAgentInbox(
     spawnError = error;
   });
 
-  const deadline = Date.now() + DAEMON_START_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (await socketIsAlive(socketPath)) {
       return { socketPath, child };
@@ -115,7 +136,7 @@ export async function ensureAgentInbox(
 
   child.kill("SIGTERM");
   throw new Error(
-    `agentinbox did not open ${socketPath} within ${DAEMON_START_TIMEOUT_MS}ms`,
+    `agentinbox did not open ${socketPath} within ${timeoutMs}ms`,
   );
 }
 

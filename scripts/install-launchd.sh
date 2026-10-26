@@ -126,6 +126,8 @@ cat >"$flume_plist" <<EOF
     <string>$wake_url</string>
     <key>FLUME_ENV_FILE</key>
     <string>$env_file</string>
+    <key>FLUME_AGENTINBOX_AUTOSTART</key>
+    <string>0</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>
@@ -193,8 +195,22 @@ if [[ "$start_services" != true ]]; then
 fi
 
 domain="gui/$(id -u)"
-launchctl bootout "$domain" com.xiaomi.flume.gitlab 2>/dev/null || true
-launchctl bootout "$domain" com.xiaomi.flume.agentinbox 2>/dev/null || true
+
+bootout() {
+  local target="$1"
+  launchctl bootout "$target" 2>/dev/null || true
+  for _ in {1..50}; do
+    if ! launchctl print "$target" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "install-launchd: could not unload $target" >&2
+  return 1
+}
+
+bootout "$domain/com.xiaomi.flume.gitlab"
+bootout "$domain/com.xiaomi.flume.agentinbox"
 launchctl bootstrap "$domain" "$agentinbox_plist"
 
 daemon_ready=false

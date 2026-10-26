@@ -542,6 +542,12 @@ plist 写入，按自己的维护窗口切换：
 主进程退出或被杀后由 launchd 自动拉起。wake gate 是既有的独立 job，本安装器
 不接管它；不要把 wake gate 与 flume 合并成一个 job，它们是独立故障域。
 
+flume 的 plist 还固定传入 `FLUME_AGENTINBOX_AUTOSTART=0`。因此 launchd 模式下
+flume 不会自举 AgentInbox 子进程：socket 尚未就绪时它会等待（至多 15 秒），
+超时则退出并由 `KeepAlive` 再试；socket 就绪后只 attach。无论两个 job 在登录
+时谁先执行，AgentInbox daemon 都保持自己的 launchd 生命周期，重启任一 job
+都不会改变另一个 job 的父子关系。
+
 ### token 放置
 
 Keychain 是 token 的人工维护源，条目为：
@@ -637,8 +643,9 @@ rm ~/.config/flume/flume.env
 
 **开发态一条命令；常驻态两个独立 job。** 前台运行 `flume start` 时，flume 探
 `~/.agentinbox/agentinbox.sock`，没有就自举，已在运行就 attach（ensure ≠ own）。
-生产安装则由 launchd 分别管理 AgentInbox daemon 和 flume：daemon 先拥有共享
-socket，flume 只 attach，任一进程重启都不依赖另一个进程的父 PID。
+生产 plist 设置 `FLUME_AGENTINBOX_AUTOSTART=0`，因此 launchd 中的 flume 只会
+等待并 attach 独立的 AgentInbox job，绝不会创建自己的 daemon 子进程。任一进程
+重启都不依赖另一个进程的父 PID。
 
 | 角色 | 形态 | 职责 |
 | :--- | :--- | :--- |
@@ -735,6 +742,7 @@ token 不进仓库、日志、响应体、plist 或命令行。缺必填项直�
 | `FLUME_HERDR_WAKE_URL` | 未配置 | herdr 唤醒门的绝对 HTTP(S) URL |
 | `FLUME_HERDR_WAKE_TIMEOUT` | `5` | 唤醒门调用超时，单位秒 |
 | `FLUME_ENV_FILE` | 未配置 | 可选；读取权限必须为 `600` 的 `KEY=value` 文件 |
+| `FLUME_AGENTINBOX_AUTOSTART` | `1` | `0` 时禁止自举，等待独立的 AgentInbox daemon |
 
 ## 端点
 
