@@ -2,7 +2,8 @@
 
 > 状态：设计定稿（2026-10-23）。
 > flume = 渡槽：只负责把水从这头运到那头。
-> 技术形态：Node/TS，与 AgentInbox 同生态，单一入口 `flume start`。
+> 技术形态：Node/TS，与 AgentInbox 同生态；开发态入口 `flume start`，生产态由
+> macOS launchd 分别管理 AgentInbox 与 flume。
 
 ---
 
@@ -190,7 +191,7 @@ flume 内部唯一事件形状，adapter 负责把各家 payload 折成它：
 
 AgentInbox 的 npm 包只有 bin（CLI/daemon 入口），没有可 import 的库面——它是进程不是库。所以「同源」= 同生态、同安装面、最终上游化；**不是** import 它的内部模块或融成一个仓库。
 
-`flume start` 语义：
+开发态的 `flume start` 语义：
 
 ```
 1. 探 ~/.agentinbox/agentinbox.sock
@@ -201,6 +202,10 @@ AgentInbox 的 npm 包只有 bin（CLI/daemon 入口），没有可 import 的�
 ```
 
 **ensure ≠ own**：daemon 是共享基础设施，codex / claude / herdr 都可能是它的租户。确保活着是服务，占有生命周期是越权。
+
+生产态不把 daemon 放在 flume 子进程里：AgentInbox 与 flume 是两个用户级
+LaunchAgent，flume 启动时只会 attach 已有 socket。这样 AgentInbox 崩了由自己的
+`KeepAlive` 拉起，flume 崩了也只重启 flume，不存在“谁是谁的子进程”生命周期耦合。
 
 ### 5.3 feed：唯一接缝
 
@@ -238,8 +243,25 @@ core 不动。adapter 只做两件事：验签、折 envelope。不许在 adapte
 ### 6.3 部署
 
 - flume 与 AgentInbox daemon 同机（其 HTTP API 只监听 loopback/unix socket）
-- GitLab webhook 指向 flume 的内网口；token 走环境变量，不进仓库
+- GitLab webhook 指向 flume 的内网口；token 不进仓库、plist 或命令行
 - herdr 在哪，这套就部署在哪；`FLUME_HERDR_WAKE_URL` 是 herdr 唤醒门的入口
+
+当前 macOS 生产运行形态：
+
+| 组件 | launchd label | 稳定路径 / 状态 |
+| :--- | :--- | :--- |
+| AgentInbox daemon | `com.xiaomi.flume.agentinbox` | `~/Applications/flume/node_modules/.../agentinbox`；socket `~/.agentinbox/agentinbox.sock` |
+| flume | `com.xiaomi.flume.gitlab` | `~/Applications/flume/dist/src/cli.js`；监听 `0.0.0.0:19420` |
+| herdr 唤醒门 | `com.xiaomi.flume.wakegate` | 独立 job；监听 `127.0.0.1:18924` |
+
+安装源先复制到 `~/Applications/flume`，再执行 `npm ci && npm run build`；运行进程
+不引用开发 worktree 或 `/private/tmp`。两个服务 job 均设置 `RunAtLoad`、
+`KeepAlive` 和 `ThrottleInterval=10`，日志在 `~/Library/Logs/flume`。
+
+GitLab webhook token 以 Keychain 条目 `flume-gitlab-webhook`（account `flume`）为
+人工维护源。安装器把值写入 `~/.config/flume/flume.env`（权限 `600`），plist 只传
+`FLUME_ENV_FILE` 路径；flume 在进程本地读取，不导出到继承环境。这样 token 不出现在
+argv、`launchctl print`、plist 或 `ps eww` 中。
 
 AgentInbox 侧一次性配置：
 
@@ -253,6 +275,17 @@ agentinbox subscription add <source_id> --agent-id <herdr-agent>
 ```
 
 source 共享、subscription 私有——别一个 PR 一个 source。
+
+### 6.4 平稳切换与故障恢复
+
+- 新版本先构建、lint、测试和 healthz 预检；同一时间不能有两个进程监听 `19420`，
+  因此切换窗口内按确认过的 PID / launchd job 做一次性替换，再立即用原 GitLab
+  webhook 投真实事件验证。
+- `launchctl kickstart -k` 只重启目标 job；AgentInbox 与 flume 互不触发重启。
+- `kill -9` flume 主进程后由 `KeepAlive` 自动拉起；验收以新 PID、`/healthz` 和真实
+  webhook 事件三者为准。
+- GitLab hook URL、AgentInbox source、subscription、target 和 lease 均不因运行形态
+  切换而改变。
 
 ## 7. 落地路径
 
@@ -347,8 +380,9 @@ SECRET_ENV 自动进必填名单，缺了直接 exit 2，不带病启动。
 | FLUME_PORT | 9420 | 监听端口 |
 | FLUME_HERDR_WAKE_URL | 未配置 | herdr 唤醒门的绝对 HTTP(S) URL |
 | FLUME_HERDR_WAKE_TIMEOUT | 5 | 唤醒门调用超时，单位秒 |
+| FLUME_ENV_FILE | 未配置 | 可选；读取权限必须为 600 的 KEY=value 文件 |
 
-token 不进仓库、不进日志、不进响应体。
+token 不进仓库、plist、argv、继承环境、日志或响应体。
 
 ## 9. 明确不做的事
 

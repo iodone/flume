@@ -352,14 +352,9 @@ flume start
 `Connection refused`，先检查 `FLUME_BIND`、端口、主机防火墙和路由，不要改 token
 掩盖网络错误；如果显示 `401`，才是 token 不一致。
 
-本次常驻由两个用户级 LaunchAgent 负责：
-`com.xiaomi.flume.gitlab` 启动 flume，
-`com.xiaomi.flume.wakegate` 启动本机 herdr 唤醒门。可以这样检查：
-
-```bash
-launchctl print "gui/$(id -u)/com.xiaomi.flume.gitlab" | grep -E 'state =|pid ='
-launchctl print "gui/$(id -u)/com.xiaomi.flume.wakegate" | grep -E 'state =|pid ='
-```
+本次常驻由 `com.xiaomi.flume.agentinbox`、`com.xiaomi.flume.gitlab` 和
+`com.xiaomi.flume.wakegate` 三个用户级 LaunchAgent 负责。安装、检查、日志和卸载见
+[「常驻安装（launchd）」](#常驻安装launchd)。
 
 flume 即使监听 `0.0.0.0`，`POST /activation` 也只接受 loopback 来源；内网请求返回
 `403 {"error":"activation is loopback-only"}`。不要把 `/activation` 暴露到反向代理。
@@ -509,6 +504,124 @@ flume: listening on 127.0.0.1:9420; agentinbox attached at /Users/mi/.agentinbox
 
 `entries` 或 `items` 正文一旦出现在 activation payload 中，flume 直接返回 400，不会转发。
 
+## 常驻安装（launchd）
+
+生产运行不依赖当前 checkout、shell 会话或 `/private/tmp`。安装器从当前 `main`
+checkout 构建一份稳定副本，AgentInbox daemon 与 flume 各由一个 LaunchAgent 管理，
+二者可以独立重启。
+
+| 项 | 固定位置 / 值 |
+| :--- | :--- |
+| flume 安装 | `~/Applications/flume` |
+| flume 配置 | `~/.config/flume` |
+| 日志 | `~/Library/Logs/flume` |
+| AgentInbox 状态 | `~/.agentinbox`（沿用现有 source / inbox） |
+| `AGENTINBOX_SOURCE_ID` | `src_kdafkw75ry7k` |
+| `FLUME_BIND` | `0.0.0.0` |
+| `FLUME_PORT` | `19420` |
+| flume 唤醒目标 | `http://127.0.0.1:18924/wake` |
+
+### 安装与启动
+
+先更新到 `main`，再执行：
+
+```bash
+./scripts/install-launchd.sh
+```
+
+安装器依次执行 `npm ci`、`npm run build`，写入两个 plist，然后先启动
+AgentInbox、等 socket 可用，再启动 flume。首次迁移时如果旧的手工进程仍占用
+`19420` 或 `~/.agentinbox/agentinbox.sock`，先用 `--no-start` 只完成构建和
+plist 写入，按自己的维护窗口切换：
+
+```bash
+./scripts/install-launchd.sh --no-start
+```
+
+两个 LaunchAgent 都设置了 `RunAtLoad`、`KeepAlive`、`ThrottleInterval=10`，
+主进程退出或被杀后由 launchd 自动拉起。wake gate 是既有的独立 job，本安装器
+不接管它；不要把 wake gate 与 flume 合并成一个 job，它们是独立故障域。
+
+### token 放置
+
+Keychain 是 token 的人工维护源，条目为：
+
+```text
+service=flume-gitlab-webhook account=flume
+```
+
+安装器用 `security find-generic-password` 读取一次，写入权限 `600` 的
+`~/.config/flume/flume.env`。LaunchAgent 只传这个文件路径
+（`FLUME_ENV_FILE`）；flume 在进程内读取，不 `source` 文件，也不把 token
+写入 plist、命令行或继承环境。选择 600 文件而不是在每次启动时由 shell 导出
+Keychain 值，是因为导出后的环境变量可被同用户进程通过 `ps eww` 读到；本地
+600 文件把秘密限制在文件权限边界内，同时保留 Keychain 作为轮换入口。
+
+安装后可做不打印 token 的暴露检查：
+
+```bash
+./scripts/check-secret-exposure.sh
+```
+
+**期望输出**
+
+```text
+launchctl_env=clean
+launch_plists=clean
+process_command=clean
+process_environment=clean
+all_process_commands=clean
+all_process_environments=clean
+```
+
+### 查看状态与日志
+
+```bash
+launchctl print "gui/$(id -u)/com.xiaomi.flume.agentinbox" | grep -E 'state =|pid ='
+launchctl print "gui/$(id -u)/com.xiaomi.flume.gitlab" | grep -E 'state =|pid ='
+launchctl print "gui/$(id -u)/com.xiaomi.flume.wakegate" | grep -E 'state =|pid ='
+curl -fsS http://127.0.0.1:19420/healthz
+agentinbox status
+```
+
+日志固定落在：
+
+```bash
+tail -f ~/Library/Logs/flume/flume.log
+tail -f ~/Library/Logs/flume/flume.err.log
+tail -f ~/Library/Logs/flume/agentinbox.log
+tail -f ~/Library/Logs/flume/agentinbox.err.log
+```
+
+单独重启任一服务：
+
+```bash
+launchctl kickstart -k "gui/$(id -u)/com.xiaomi.flume.gitlab"
+launchctl kickstart -k "gui/$(id -u)/com.xiaomi.flume.agentinbox"
+```
+
+重启 flume 不需要重启 AgentInbox；重启 AgentInbox 也不需要重启 flume。验证时应从
+GitLab 原 webhook 触发真实事件，而不是只在本机 curl `/healthz`。
+
+### 卸载
+
+先按 [`docs/REMOVAL.md`](docs/REMOVAL.md) 删除 GitLab webhook 和 AgentInbox
+路由，再执行：
+
+```bash
+launchctl bootout "gui/$(id -u)" com.xiaomi.flume.gitlab 2>/dev/null || true
+launchctl bootout "gui/$(id -u)" com.xiaomi.flume.agentinbox 2>/dev/null || true
+launchctl bootout "gui/$(id -u)" com.xiaomi.flume.wakegate 2>/dev/null || true
+rm ~/Library/LaunchAgents/com.xiaomi.flume.gitlab.plist
+rm ~/Library/LaunchAgents/com.xiaomi.flume.agentinbox.plist
+rm ~/Library/LaunchAgents/com.xiaomi.flume.wakegate.plist
+rm -rf ~/Applications/flume
+rm ~/.config/flume/flume.env
+```
+
+`~/.agentinbox`、`~/.config/flume` 和日志目录可能还有别的租户或审计价值；确认
+不再需要后再手工删除。无论卸载顺序如何，都不要用 `pkill node` 按进程名清理。
+
 ## 排错表
 
 | 现象 | 原因 | 处理 |
@@ -522,7 +635,10 @@ flume: listening on 127.0.0.1:9420; agentinbox attached at /Users/mi/.agentinbox
 
 ## 进程模型
 
-**用户只启动一个东西：`flume start`。** AgentInbox daemon 不用单独启动；flume 探 `~/.agentinbox/agentinbox.sock`，没有就自举，已在运行就 attach（ensure ≠ own）。
+**开发态一条命令；常驻态两个独立 job。** 前台运行 `flume start` 时，flume 探
+`~/.agentinbox/agentinbox.sock`，没有就自举，已在运行就 attach（ensure ≠ own）。
+生产安装则由 launchd 分别管理 AgentInbox daemon 和 flume：daemon 先拥有共享
+socket，flume 只 attach，任一进程重启都不依赖另一个进程的父 PID。
 
 | 角色 | 形态 | 职责 |
 | :--- | :--- | :--- |
@@ -607,7 +723,8 @@ end note
 
 ## 配置
 
-全部走环境变量，token 不进仓库、不进日志、不进响应体。缺必填项直接 exit 2。
+全部走环境变量；常驻部署可用 `FLUME_ENV_FILE` 从权限 `600` 的文件补充变量。
+token 不进仓库、日志、响应体、plist 或命令行。缺必填项直接 exit 2。
 
 | 变量 | 默认 | 说明 |
 | :--- | :--- | :--- |
@@ -617,6 +734,7 @@ end note
 | `FLUME_PORT` | `9420` | 监听端口 |
 | `FLUME_HERDR_WAKE_URL` | 未配置 | herdr 唤醒门的绝对 HTTP(S) URL |
 | `FLUME_HERDR_WAKE_TIMEOUT` | `5` | 唤醒门调用超时，单位秒 |
+| `FLUME_ENV_FILE` | 未配置 | 可选；读取权限必须为 `600` 的 `KEY=value` 文件 |
 
 ## 端点
 
