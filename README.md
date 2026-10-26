@@ -287,7 +287,7 @@ done
 
 ### 6. 接 herdr 唤醒门
 
-把变量改成 herdr 唤醒门的真实入口；这是 flume 从 `/activation` 转发到的目标，不是 AgentInbox 的目标。
+下面用本机地址确认配置形状；真实部署时只把这个值换成 herdr 唤醒门入口。这个 URL 是 flume 从 `/activation` 转发到的目标，不是 AgentInbox 的目标。
 
 ```bash
 export FLUME_HERDR_WAKE_URL=http://127.0.0.1:18080/wake
