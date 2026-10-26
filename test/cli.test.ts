@@ -132,6 +132,31 @@ test("ensureAgentInbox reports a missing launchd-managed daemon", async () => {
   }
 });
 
+test("ensureAgentInbox waits for a launchd-managed daemon", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "flume-socket-"));
+  const socketPath = path.join(directory, "agentinbox.sock");
+  const waiting = ensureAgentInbox(
+    {
+      AGENTINBOX_SOCKET: socketPath,
+      FLUME_AGENTINBOX_AUTOSTART: "0",
+    },
+    { timeoutMs: 2_000 },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 200));
+
+  const server = net.createServer((socket) => socket.end());
+  await listen(server, socketPath);
+
+  try {
+    const daemon = await waiting;
+    assert.equal(daemon.socketPath, socketPath);
+    assert.equal(daemon.child, null);
+  } finally {
+    await close(server);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 function listen(server: Server, socketPath: string): Promise<void> {
   return new Promise((resolve, reject) => {
     server.once("error", reject);
