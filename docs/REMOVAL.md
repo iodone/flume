@@ -29,7 +29,7 @@ glab api --hostname git.n.xiaomi.com projects/262378/hooks |
 
 ## 2. 停止接收进程
 
-本次部署用两个用户级 LaunchAgent 常驻：
+先停 flume 和唤醒门，暂时保留 AgentInbox daemon，供下一步清理路由：
 
 ```bash
 launchctl bootout "gui/$(id -u)" com.xiaomi.flume.gitlab 2>/dev/null || true
@@ -46,7 +46,7 @@ lsof -nP -iTCP:19420 -sTCP:LISTEN
 lsof -nP -iTCP:18924 -sTCP:LISTEN
 ```
 
-如果 flume 是用前台命令启动的，直接在该终端按 `Ctrl-C`。不要用宽泛的
+如果 flume 是用前台命令启动的，只在该终端按 `Ctrl-C`。不要用宽泛的
 `pkill node`，同机可能还有别的 Node/AgentInbox 服务。
 
 ## 3. 清理 AgentInbox 路由（可选但推荐）
@@ -69,18 +69,48 @@ agentinbox agent remove herdr-main
 如果该 agent 或 subscription 还服务别的 source，不要删除；只撤销
 `olap/miergo` 的 webhook 和 flume 接收端口即可。
 
-## 4. 撤销 Secret
+## 4. 停止并卸载 AgentInbox LaunchAgent
 
-GitLab hook 删除后，flume 已经无法再收到该 token 的请求。确认没有其他部署复用后，
-从系统钥匙串删除：
+路由清理完成后，再停本试点专用的 daemon job：
 
 ```bash
+launchctl bootout "gui/$(id -u)" com.xiaomi.flume.agentinbox 2>/dev/null || true
+launchctl print "gui/$(id -u)/com.xiaomi.flume.agentinbox" 2>&1 | head
+# 预期：Could not find service
+```
+
+如果 `~/.agentinbox` 还被 codex、claude 或 herdr 的其他实例共用，不要删除状态目录。
+只删除本试点安装的 job 和文件：
+
+```bash
+rm ~/Library/LaunchAgents/com.xiaomi.flume.gitlab.plist
+rm ~/Library/LaunchAgents/com.xiaomi.flume.agentinbox.plist
+rm ~/Library/LaunchAgents/com.xiaomi.flume.wakegate.plist
+rm -rf ~/Applications/flume
+```
+
+确认不再引用旧的稳定安装或 `/private/tmp`：
+
+```bash
+ps -axo pid,command | grep -F '/private/tmp/flume-rev/repo' | grep -v grep
+```
+
+该命令应无输出。不要按进程名批量杀进程；如确有旧实例，先用 PID 和启动路径核对，
+再只终止那一个 PID。
+
+## 5. 撤销 Secret
+
+GitLab hook 删除后，flume 已经无法再收到该 token 的请求。确认没有其他部署复用后，
+删除 launchd 使用的 600 文件，再从系统钥匙串删除：
+
+```bash
+rm ~/.config/flume/flume.env
 security delete-generic-password -a flume -s flume-gitlab-webhook
 ```
 
 不要再从 shell 历史或日志里寻找 token；轮换记录只保留“何时被撤销”，不保留明文。
 
-## 5. 撤除后确认
+## 6. 撤除后确认
 
 ```bash
 test -z "$(glab api --hostname git.n.xiaomi.com projects/262378/hooks |

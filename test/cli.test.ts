@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdtemp, rm, stat } from "node:fs/promises";
+import net, { type Server } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+
+import { ensureAgentInbox } from "../src/cli.js";
 
 test("flume start exits 2 when required configuration is missing", async () => {
   const cli = path.resolve("dist/src/cli.js");
@@ -85,3 +88,84 @@ test(
     }
   },
 );
+
+test("ensureAgentInbox attaches without spawning when autostart is disabled", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "flume-socket-"));
+  const socketPath = path.join(directory, "agentinbox.sock");
+  const server = net.createServer((socket) => socket.end());
+  await listen(server, socketPath);
+
+  try {
+    const daemon = await ensureAgentInbox(
+      {
+        AGENTINBOX_SOCKET: socketPath,
+        FLUME_AGENTINBOX_AUTOSTART: "0",
+      },
+      { timeoutMs: 1_000 },
+    );
+
+    assert.equal(daemon.socketPath, socketPath);
+    assert.equal(daemon.child, null);
+  } finally {
+    await close(server);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("ensureAgentInbox reports a missing launchd-managed daemon", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "flume-socket-"));
+  const socketPath = path.join(directory, "agentinbox.sock");
+
+  try {
+    await assert.rejects(
+      ensureAgentInbox(
+        {
+          AGENTINBOX_SOCKET: socketPath,
+          FLUME_AGENTINBOX_AUTOSTART: "0",
+        },
+        { timeoutMs: 250 },
+      ),
+      /FLUME_AGENTINBOX_AUTOSTART=0/,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("ensureAgentInbox waits for a launchd-managed daemon", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "flume-socket-"));
+  const socketPath = path.join(directory, "agentinbox.sock");
+  const waiting = ensureAgentInbox(
+    {
+      AGENTINBOX_SOCKET: socketPath,
+      FLUME_AGENTINBOX_AUTOSTART: "0",
+    },
+    { timeoutMs: 2_000 },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 200));
+
+  const server = net.createServer((socket) => socket.end());
+  await listen(server, socketPath);
+
+  try {
+    const daemon = await waiting;
+    assert.equal(daemon.socketPath, socketPath);
+    assert.equal(daemon.child, null);
+  } finally {
+    await close(server);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+function listen(server: Server, socketPath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(socketPath, resolve);
+  });
+}
+
+function close(server: Server): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+}
