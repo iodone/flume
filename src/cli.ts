@@ -14,6 +14,7 @@ import {
   localAddress,
   type Config,
 } from "./core.js";
+import { environmentWithOptionalFile } from "./env.js";
 import { agentInboxSocketPath, resolveAgentInboxBin } from "./feed.js";
 
 const DAEMON_START_TIMEOUT_MS = 15_000;
@@ -39,8 +40,10 @@ export async function main(
   }
 
   let config: Config;
+  let runtimeEnv: NodeJS.ProcessEnv;
   try {
-    config = configFromEnv(env);
+    runtimeEnv = await environmentWithOptionalFile(env);
+    config = configFromEnv(runtimeEnv);
   } catch (error) {
     const message = error instanceof ConfigError ? error.message : String(error);
     process.stderr.write(`flume: ${message}\n`);
@@ -49,7 +52,7 @@ export async function main(
 
   let daemon: Daemon | null = null;
   try {
-    daemon = await ensureAgentInbox(env);
+    daemon = await ensureAgentInbox(daemonEnvironment(runtimeEnv));
     const server = createFlumeServer(config);
     await listen(server, config);
     const address = localAddress(server);
@@ -113,6 +116,12 @@ export async function ensureAgentInbox(
   child.kill("SIGTERM");
   throw new Error(
     `agentinbox did not open ${socketPath} within ${DAEMON_START_TIMEOUT_MS}ms`,
+  );
+}
+
+function daemonEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(env).filter(([key]) => !/^FLUME_.*_TOKEN$/.test(key)),
   );
 }
 
