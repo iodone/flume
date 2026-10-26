@@ -23,7 +23,9 @@ flume 只做四件事：
 
 ## 快速开始
 
-以下命令从仓库根目录开始。需要 Node.js 22.23.4+。
+以下命令从仓库根目录开始。Node.js 版本与 `@holon-run/agentinbox` 保持一致：
+`^22.23.4 || ^24.22.1 || >=26.12.1`。Node.js 23.x / 25.x 不在依赖声明的支持范围内。
+本仓库验证机使用 Node.js 25.9.0，实际可以运行，但部署时应选择上方受支持的版本。
 
 ### 1. 安装并确认 CLI
 
@@ -66,7 +68,15 @@ env ready
 flume start
 ```
 
-**期望输出**（socket 路径随 `HOME` 变化；已有 daemon 时显示 `attached`）
+**期望输出**（socket 路径随 `HOME` 变化）
+
+首次运行，`~/.agentinbox` 下没有可用 daemon，flume 会启动它：
+
+```text
+flume: listening on 127.0.0.1:9420; agentinbox started at /Users/mi/.agentinbox/agentinbox.sock
+```
+
+已有 daemon 正在监听同一 socket，flume 会 attach 而不接管其生命周期：
 
 ```text
 flume: listening on 127.0.0.1:9420; agentinbox attached at /Users/mi/.agentinbox/agentinbox.sock
@@ -185,6 +195,14 @@ flume start
 ```
 
 **期望输出**（socket 路径随 `HOME` 变化）
+
+首次运行，flume 启动 AgentInbox daemon：
+
+```text
+flume: listening on 127.0.0.1:9420; agentinbox started at /Users/mi/.agentinbox/agentinbox.sock
+```
+
+已有 daemon，flume 直接 attach：
 
 ```text
 flume: listening on 127.0.0.1:9420; agentinbox attached at /Users/mi/.agentinbox/agentinbox.sock
@@ -307,6 +325,14 @@ flume start
 ```
 
 **期望输出**
+
+首次运行，flume 启动 AgentInbox daemon：
+
+```text
+flume: listening on 127.0.0.1:9420; agentinbox started at /Users/mi/.agentinbox/agentinbox.sock
+```
+
+已有 daemon，flume 直接 attach：
 
 ```text
 flume: listening on 127.0.0.1:9420; agentinbox attached at /Users/mi/.agentinbox/agentinbox.sock
