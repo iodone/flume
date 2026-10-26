@@ -299,7 +299,7 @@ source 共享、subscription 私有——别一个 PR 一个 source。
 的项目级 webhook 已直接投递到内网 flume。真实 MR、评论、Push 与 Pipeline
 事件均走通 `GitLab → flume → AgentInbox → 唤醒门 → herdr`；同一 GitLab
 投递 UUID 重投只保留一个 stream event。项目级 Webhook 的五个开关、token
-轮换、可达性检查和撤除步骤见 [`README.md`](../README.md) 与
+轮换、可达性检查和撤除步骤见 [`USAGE.md`](USAGE.md) 与
 [`REMOVAL.md`](REMOVAL.md)。
 
 - envelope + gitlab adapter（验签 / 归一 / native_id 稳定性）
