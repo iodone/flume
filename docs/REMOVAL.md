@@ -83,6 +83,8 @@ security delete-generic-password -a flume -s flume-github-webhook
 security delete-generic-password -a flume -s flume-gitlab-webhook
 ```
 
+如果 secret 写在 `.env.local`，同时删除该文件。
+
 ## 6. 清理日志与仓库
 
 确认日志不再需要后：

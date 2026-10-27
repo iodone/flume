@@ -19,10 +19,10 @@ flume 是零状态事件转运层：**验签 → 归一成统一 envelope → �
 1. 按第 3 节写入 webhook secret。
 2. 按第 3 节配置事件源 webhook。
 3. 按第 3 节复制并配置 agent intake skill。
-4. 启动：
+4. 按第 3 节生成并填写 `.env.local`。
+5. 启动：
 
 ```bash
-FLUME_AGENTINBOX_INTAKE_SKILL=/path/to/your-agent/.agents/skills/workflow-event-intake/SKILL.md \
 ./run-flume.sh
 ```
 
@@ -55,20 +55,28 @@ FLUME_AGENTINBOX_INTAKE_SKILL=/path/to/your-agent/.agents/skills/workflow-event-
 
 ## 3. 配置
 
-所有默认值都在 [`run-flume.sh`](../run-flume.sh)。需要变更时直接改脚本，或在启动前设置同名环境变量；前台启动、launchd 和 CI 使用同一个入口。
+默认值在 [`run-flume.sh`](../run-flume.sh)。本机配置写入仓库根目录 `.env.local`，启动时自动加载；也可以在启动前设置同名环境变量。优先级：显式环境变量 > `.env.local` > 脚本默认值；前台启动、launchd 和 CI 使用同一个入口。
+
+```bash
+cp .env.example .env.local
+chmod 600 .env.local
+$EDITOR .env.local
+```
+
+`.env.local` 已被 Git 忽略，权限必须为 `600`。模板 `.env.example` 只列变量；密钥优先放 Keychain。`FLUME_ENV_FILE` 可以指向其他文件，默认使用仓库根目录的 `.env.local`。
 
 | 变量 | 默认值 | 用途 |
 | :--- | :--- | :--- |
 | `FLUME_ADAPTERS` | `github` | 启用的事件源，逗号分隔：`github`、`gitlab` 或 `github,gitlab` |
-| `AGENTINBOX_SOURCE_ID` | 见 `run-flume.sh` | AgentInbox 的 source id；事件写入该 source，订阅按它匹配 |
+| `AGENTINBOX_SOURCE_ID` | **必填** | AgentInbox 的 source id；事件写入该 source，订阅按它匹配 |
 | `FLUME_GITHUB_SECRET` | 从 Keychain 读取 | GitHub webhook secret；非 macOS 或本地测试时可直接用环境变量 |
 | `FLUME_GITLAB_TOKEN` | 未设置 | 仅在启用 `gitlab` adapter 时需要 |
 | `FLUME_BIND` | `0.0.0.0` | 监听地址；只允许本机访问时改 `127.0.0.1` |
 | `FLUME_PORT` | `19420` | 监听端口；修改后 webhook URL 要同步修改 |
-| `FLUME_HERDR_WAKE_AGENT` | 见 `run-flume.sh` | 唤醒器使用的 coordinator agent 名；workspace 名独立配置 |
-| `FLUME_AGENTINBOX_AGENT_ID` | 见 `run-flume.sh` | coordinator 在 AgentInbox 中的 agent id，用于读取和确认 inbox |
+| `FLUME_HERDR_WAKE_AGENT` | 未设置 | 唤醒器使用的 coordinator agent 名；workspace 名独立配置 |
+| `FLUME_AGENTINBOX_AGENT_ID` | 未设置 | coordinator 在 AgentInbox 中的 agent id，用于读取和确认 inbox |
 | `FLUME_AGENTINBOX_INTAKE_SKILL` | **必填** | 指向你自己配置过的 `SKILL.md`；flume 只传路径，由 agent 加载执行；缺失时拒绝启动 |
-| `HERDR_BIN_PATH` | 见 `run-flume.sh` | 当前 herdr 示例的唤醒器可执行文件路径 |
+| `HERDR_BIN_PATH` | `herdr` | 当前 herdr 示例的唤醒器可执行文件路径 |
 | `FLUME_HERDR_WAKE_TIMEOUT` | `10` | 唤醒命令超时，单位秒 |
 | `FLUME_HERDR_WAKE_URL` | 未设置 | 外部 HTTP 唤醒器的 endpoint；herdr 示例走命令唤醒 |
 
@@ -179,7 +187,6 @@ webhook 指向 `POST /gitlab`。完整 adapter 说明见 [`ADAPTERS.md`](ADAPTER
 ## 4. 启动与验证
 
 ```bash
-FLUME_AGENTINBOX_INTAKE_SKILL=/path/to/your-agent/.agents/skills/workflow-event-intake/SKILL.md \
 ./run-flume.sh
 ```
 
@@ -226,12 +233,11 @@ npm run smoke
 
 把仓库里的 plist 链接到 `~/Library/LaunchAgents` 即可，launchd 会从该目录加载用户级 job。
 
-仓库里的 `deploy/com.flume.plist` 就是 flume 进程的 launchd 入口，label 固定为 `com.flume`。事件源不影响 job 名称；切换 GitHub / GitLab 只改 `EnvironmentVariables`：
+仓库里的 `deploy/com.flume.plist` 就是 flume 进程的 launchd 入口，label 固定为 `com.flume`。事件源不影响 job 名称；本机配置写入 `.env.local`，plist 的 `EnvironmentVariables` 作为显式覆盖：
 
 ```bash
 # ProgramArguments=/absolute/path/to/flume/run-flume.sh
-# FLUME_ADAPTERS=github   # 或 gitlab
-# FLUME_AGENTINBOX_INTAKE_SKILL=/path/to/your-agent/.agents/skills/workflow-event-intake/SKILL.md
+# 适配器、agent、intake skill 等变量写入 .env.local
 mkdir -p logs
 ln -sf "$PWD/deploy/com.flume.plist" \
   "$HOME/Library/LaunchAgents/com.flume.plist"

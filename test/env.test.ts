@@ -60,3 +60,24 @@ test("rejects an env file readable by group or others", async () => {
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("explicit environment takes precedence over the env file", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "flume-env-"));
+  const envPath = path.join(directory, "flume.env");
+
+  try {
+    await writeFile(envPath, "FLUME_PORT=1000\nFLUME_BIND=file-host\n", { mode: 0o600 });
+    await chmod(envPath, 0o600);
+
+    const loaded = await environmentWithOptionalFile({
+      FLUME_ENV_FILE: envPath,
+      FLUME_PORT: "2000",
+      FLUME_BIND: "shell-host",
+    });
+
+    assert.equal(loaded.FLUME_PORT, "2000");
+    assert.equal(loaded.FLUME_BIND, "shell-host");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

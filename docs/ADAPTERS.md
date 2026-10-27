@@ -120,7 +120,7 @@ const ADAPTERS: readonly Adapter[] = [gitlab, jira];
 
 ### 3. 配置 secret
 
-在 `run-flume.sh` 中加默认值或 keychain 读取。`SECRET_ENV` 是启动必填项，缺失时进程以退出码 2 结束：
+在 `run-flume.sh` 中加默认值或 keychain 读取，或把值写入 `.env.local`。`SECRET_ENV` 是启动必填项，缺失时进程以退出码 2 结束：
 
 ```bash
 export FLUME_JIRA_TOKEN="${FLUME_JIRA_TOKEN:-$(security find-generic-password -a flume -s flume-jira-webhook -w)}"
