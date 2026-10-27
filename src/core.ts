@@ -7,6 +7,7 @@ import {
   ActivationError,
   DEFAULT_WAKE_TIMEOUT_MS,
   dispatchActivation,
+  dispatchHerdrPrompt,
   WakeGateError,
 } from "./activation.js";
 import { allAdapters, getAdapter } from "./adapters/index.js";
@@ -33,6 +34,8 @@ export interface Config {
   sourceId: string;
   secrets: Record<string, string>;
   wakeUrl?: string;
+  wakeAgent?: string;
+  herdrBin?: string;
   wakeTimeoutMs?: number;
 }
 
@@ -71,6 +74,8 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
       allAdapters().map((adapter) => [adapter.NAME, env[adapter.SECRET_ENV]!]),
     ),
     wakeUrl: env.FLUME_HERDR_WAKE_URL?.trim() || undefined,
+    wakeAgent: env.FLUME_HERDR_WAKE_AGENT?.trim() || undefined,
+    herdrBin: env.HERDR_BIN_PATH?.trim() || "herdr",
     wakeTimeoutMs: timeoutSeconds * 1_000,
   };
 }
@@ -259,18 +264,26 @@ async function handleActivation(
     sendJson(response, 202, { accepted: 0 });
     return;
   }
-  if (!config.wakeUrl) {
-    console.error("flume: activation rejected: FLUME_HERDR_WAKE_URL is not set");
+  if (!config.wakeAgent && !config.wakeUrl) {
+    console.error(
+      "flume: activation rejected: FLUME_HERDR_WAKE_AGENT or FLUME_HERDR_WAKE_URL is not set",
+    );
     sendJson(response, 503, { error: "wake gate not configured" });
     return;
   }
 
   try {
-    await dispatchActivation(
-      config.wakeUrl,
-      activation,
-      config.wakeTimeoutMs ?? DEFAULT_WAKE_TIMEOUT_MS,
-    );
+    const timeoutMs = config.wakeTimeoutMs ?? DEFAULT_WAKE_TIMEOUT_MS;
+    if (config.wakeAgent) {
+      await dispatchHerdrPrompt(
+        config.herdrBin ?? "herdr",
+        config.wakeAgent,
+        activation,
+        timeoutMs,
+      );
+    } else {
+      await dispatchActivation(config.wakeUrl!, activation, timeoutMs);
+    }
   } catch (error) {
     const detail = error instanceof WakeGateError ? error.message : String(error);
     console.error(`flume: wake gate failed: ${detail}`);
@@ -278,8 +291,11 @@ async function handleActivation(
     return;
   }
 
+  const target = config.wakeAgent
+    ? `agent=${config.wakeAgent}`
+    : `url=${config.wakeUrl}`;
   console.log(
-    `flume: woke herdr newEntryCount=${activation.newEntryCount} latestEntryId=${activation.latestEntryId}`,
+    `flume: woke herdr ${target} newEntryCount=${activation.newEntryCount} latestEntryId=${activation.latestEntryId}`,
   );
   sendJson(response, 202, { accepted: 1 });
 }

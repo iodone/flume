@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process";
+
 import type { JsonObject } from "./envelope.js";
 
 export const KIND = "agentinbox.activation";
@@ -167,4 +169,32 @@ export async function dispatchActivation(
     throw new WakeGateError(`wake gate returned HTTP ${response.status}`);
   }
   await response.body?.cancel().catch(() => undefined);
+}
+
+export async function dispatchHerdrPrompt(
+  bin: string,
+  agent: string,
+  activation: Activation,
+  timeoutMs: number = DEFAULT_WAKE_TIMEOUT_MS,
+): Promise<void> {
+  const prompt = [
+    "A flume activation arrived for AgentInbox.",
+    `newEntryCount=${activation.newEntryCount}`,
+    "Reply exactly `flume wake received` and stop. Do not modify files.",
+  ].join("\n");
+
+  await new Promise<void>((resolve, reject) => {
+    execFile(
+      bin,
+      ["agent", "prompt", agent, prompt],
+      { timeout: timeoutMs, maxBuffer: 1024 * 1024 },
+      (error) => {
+        if (error) {
+          reject(new WakeGateError(`herdr prompt failed: ${error.message}`));
+          return;
+        }
+        resolve();
+      },
+    );
+  });
 }

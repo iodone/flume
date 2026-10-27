@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import http, { type IncomingHttpHeaders, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import {
@@ -233,6 +236,44 @@ test("returns 503 when a wake is needed but no wake gate is configured", async (
     assert.deepEqual(response.body, { error: "wake gate not configured" });
   } finally {
     await close(flume);
+  }
+});
+
+test("calls herdr agent prompt directly when wakeAgent is configured", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "flume-herdr-"));
+  const argsFile = join(directory, "args.txt");
+  const herdrBin = join(directory, "herdr");
+  await writeFile(
+    herdrBin,
+    `#!/bin/sh\nprintf '%s\\n' "$@" > "${argsFile}"\n`,
+    { mode: 0o755 },
+  );
+
+  const flume = createFlumeServer({
+    ...CONFIG,
+    wakeAgent: "sw-coordinator",
+    herdrBin,
+    wakeTimeoutMs: 2_000,
+  });
+  await listen(flume);
+
+  try {
+    const port = (flume.address() as AddressInfo).port;
+    const response = await post(port, "/activation", {
+      kind: KIND,
+      newEntryCount: 1,
+      latestEntryId: "entry-42",
+      summary: "1 new event",
+    });
+
+    assert.equal(response.status, 202);
+    assert.deepEqual(response.body, { accepted: 1 });
+    const args = await readFile(argsFile, "utf8");
+    assert.match(args, /^agent\nprompt\nsw-coordinator\n/);
+    assert.match(args, /newEntryCount=1/);
+  } finally {
+    await close(flume);
+    await rm(directory, { recursive: true, force: true });
   }
 });
 
