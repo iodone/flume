@@ -11,6 +11,8 @@ TASK_CLI='<task-cli>'
 TASK_REPO='<task-repo>'
 TASK_PREFIX='<task-prefix>'
 BRANCH_PREFIX='work/'
+ISSUE_POLICY='ignore'          # ignore | queue
+PUBLISH_REVIEW_COMMENTS=true   # standing authorization for comments only
 REVIEW_WORKSPACE='<review-workspace>'
 ```
 
@@ -90,7 +92,8 @@ For an issue, dedupe by `updatedAt` plus the latest human comment id.
 
 - A branch `<BRANCH_PREFIX><n>-...` maps to the task id convention configured for
   this deployment (`<TASK_PREFIX><n>` by default).
-- Verify the task's branch matches the PR `headRefName` before continuing it.
+- Verify the match through the task's worktree branch when the task system
+  exposes one; otherwise fall back to the task title. Never trust a guess.
 - A review request searches existing tasks whose title contains
   `<PROJECT>#<NUMBER>` or `<REPO>#<NUMBER>`.
 - If a matching task is active, do not create another task.
@@ -102,9 +105,14 @@ Create a review task in the configured task system and start it:
 
 ```bash
 $TASK_CLI add "Review $REPO#$NUMBER <short title>" \
-  --repo "$TASK_REPO" --delegate \
+  --repo "$TASK_REPO" --research --delegate \
+  --review.when never \
   --desc "<brief>"
 ```
+
+`--review.when never` turns off the board's post-work automatic review. A review
+task changes nothing, so an automatic review has nothing to review and only burns
+a reviewer round.
 
 Brief template:
 
@@ -129,8 +137,9 @@ Use the project's review playbook.
 5. Inspect the diff and dependency impact with project-approved tooling.
 6. Review against the project's spec, standards, and structure. Write notes to:
    <REVIEW_WORKSPACE>/<REVIEW_PROJECT>/pr-<NUMBER>.md
-7. Publish a review comment only under an explicit standing authorization.
-   Do not approve, request changes, merge, close, commit, or push.
+7. Publish one review comment per head revision, only when
+   PUBLISH_REVIEW_COMMENTS is true. Do not approve, request changes, merge,
+   close, commit, or push.
 ```
 
 ## Feedback
@@ -158,11 +167,17 @@ After sending, update `last_review_id` / `last_comment_id`, `head_sha`, and
 
 ## Issue update
 
-Search existing task descriptions for the issue URL. If found and idle, send the
-original update. If the issue is new and has no task, add it without starting it.
-Do not auto-start new issue work.
+`ISSUE_POLICY=ignore`: inspect and ack, no task and no message. `queue`: search
+existing task descriptions for the issue URL; if found and idle, send the original
+update, otherwise add the task without starting it. Never auto-start issue work.
 
 ## Lifecycle
 
-On merge or close, update or close the matching task. Do not approve, merge, or
-close anything yourself.
+On merge or close, finish the matching task:
+
+```bash
+$TASK_CLI report <id> --state done --msg "<merged|closed> at <TIME>"
+```
+
+Say whether it was merged or closed, so a close without merge is not hidden. Do not
+approve, merge, or close anything yourself.

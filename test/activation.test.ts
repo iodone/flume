@@ -253,7 +253,7 @@ test("calls herdr agent prompt directly when wakeAgent is configured", async () 
     ...CONFIG,
     wakeAgent: "sw-coordinator",
     inboxAgent: "herdr-main",
-    intakeSkill: "/tmp/workflow-gitlab-event-intake/SKILL.md",
+    intakeSkill: "/tmp/workflow-event-intake/SKILL.md",
     herdrBin,
     wakeTimeoutMs: 2_000,
   });
@@ -274,8 +274,8 @@ test("calls herdr agent prompt directly when wakeAgent is configured", async () 
     assert.match(args, /^agent\nprompt\nsw-coordinator\n/);
     assert.match(args, /agentId=herdr-main/);
     assert.match(args, /newEntryCount=1/);
-    assert.match(args, /intakeSkill=\/tmp\/workflow-gitlab-event-intake\/SKILL\.md/);
-    assert.match(args, /Read and follow \/tmp\/workflow-gitlab-event-intake\/SKILL\.md/);
+    assert.match(args, /intakeSkill=\/tmp\/workflow-event-intake\/SKILL\.md/);
+    assert.match(args, /Read and follow \/tmp\/workflow-event-intake\/SKILL\.md/);
     assert.match(args, /only a wake signal/);
     assert.match(args, /does not contain event bodies/);
     assert.match(args, /Process this activation now/);

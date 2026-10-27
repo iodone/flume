@@ -209,7 +209,7 @@ skill 的职责：
 - 读 AgentInbox 未 ack 条目，最多 50 条。
 - 按 `envelope.source` 加载 `sources/<source>.md`。
 - 把事件映射成 `REVIEW_REQUEST` / `FEEDBACK` / `ISSUE_UPDATE` / `LIFECYCLE` / `NOISE`。
-- review 请求建 task 并派工；反馈找回已有 task 并转交原文；issue 变动找回已关联 task；噪声只 ack。
+- review 请求建 task 并派工；反馈找回已有 task 并转交原文；merged / closed 把 task 收口为 done；issue 变动按 source policy（模板默认 `ignore`，只 ack）；噪声只 ack。
 - `ack --through` 最后一条实际审过的 entry。
 
 GitHub 的参考映射（按你的配置修改 `sources/github.md`）：
@@ -219,8 +219,8 @@ GitHub 的参考映射（按你的配置修改 `sources/github.md`）：
 | 我是 requested reviewer/assignee 的 open PR | `REVIEW_REQUEST` | 建 review task 并立即派工 |
 | 我的 PR 出现 review / review comment / issue comment | `FEEDBACK` | 找回 task，原文交给 agent；merge 由人类决定 |
 | 我的 PR 被 approve / changes requested / dismiss | `FEEDBACK` | 把 review state 和 head sha 交给 task |
-| 已关联 task 的 issue 变动 | `ISSUE_UPDATE` | 把原始变动交给对应 task；新 issue 只入队 |
-| merged / closed | `LIFECYCLE` | 更新或关闭 task |
+| issue 变动 | `ISSUE_UPDATE` | 按 source policy：`ignore` 只 ack（模板默认），`queue` 才入队 |
+| merged / closed | `LIFECYCLE` | 把对应 task 置为 done，原因写进消息 |
 | push、workflow_run、重复投递 | `NOISE` | 审阅后 ack |
 
 ## 扩展适配

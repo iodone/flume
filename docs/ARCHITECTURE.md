@@ -111,8 +111,9 @@ coordinator
 ```
 
 intake 只决定“做不做、做哪个 task”：`REVIEW_REQUEST` 建 task 并派工，
-`FEEDBACK` 找回已有 task 并把原文交回去，`ISSUE_UPDATE` 交回已有 task 或入队，
-`LIFECYCLE` 更新/关闭 task，`NOISE` 只 ack。review 的判据和步骤归任务执行层的
+`FEEDBACK` 找回已有 task 并把原文交回去，`ISSUE_UPDATE` 按 source policy（默认
+`ignore`，只 ack；`queue` 才入队），`LIFECYCLE` 把 task 置为 done，`NOISE` 只 ack。
+review 的判据和步骤归任务执行层的
 `review` playbook。策略可以显式允许 review task 派工；approve / merge / close
 由人类明确指令触发。
 

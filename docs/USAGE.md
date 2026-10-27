@@ -153,8 +153,8 @@ skill 的职责：
 4. 按 intent 路由：
    - `REVIEW_REQUEST` → 在任务系统建 review task 并派工
    - `FEEDBACK` → 找回已有 task，原始文本 `tell` 过去
-   - `ISSUE_UPDATE` → 找回已关联 task；新 issue 只入队
-   - `LIFECYCLE` → 更新或关闭 task
+   - `ISSUE_UPDATE` → 按 source policy：`ignore` 只 ack（模板默认），`queue` 才入队
+   - `LIFECYCLE` → 把对应 task 置为 done，原因写进消息
    - `NOISE` → 只 ack
 5. `ack --through` 最后一条实际审过的 entry。
 
@@ -167,8 +167,8 @@ GitHub 的参考映射（按你的配置修改 `sources/github.md`）：
 | 我是 requested reviewer/assignee 的 open PR | `REVIEW_REQUEST` | 建 review task 并立即派工 |
 | 我的 PR 出现 review / review comment / issue comment | `FEEDBACK` | 找回 task，原文交给 agent；merge 由人类决定 |
 | 我的 PR 被 approve / changes requested / dismiss | `FEEDBACK` | 把 review state 和 head sha 交给 task |
-| 已关联 task 的 issue 变动 | `ISSUE_UPDATE` | 把原始变动交给对应 task；新 issue 只入队 |
-| merged / closed | `LIFECYCLE` | 更新或关闭 task |
+| issue 变动 | `ISSUE_UPDATE` | 按 source policy：`ignore` 只 ack（模板默认），`queue` 才入队 |
+| merged / closed | `LIFECYCLE` | 把对应 task 置为 done，原因写进消息 |
 | push、workflow_run、重复投递 | `NOISE` | 审阅后 ack |
 
 ### GitLab（可选）
