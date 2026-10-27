@@ -110,5 +110,62 @@ launchctl bootstrap "gui/$(id -u)" \
 
 ## 运行链路
 
-`GitLab → flume → AgentInbox → flume /activation → herdr coordinator` 的模块调用
-序列图、等待表判据和排错见 [`docs/USAGE.md`](docs/USAGE.md)。
+```plantuml
+@startuml
+title 一条 GitLab MR 事件的运行链路
+
+actor       "GitLab"                      as GL
+participant "flume"                       as FL
+participant "AgentInbox daemon"           as AI
+participant "herdr-projects coordinator"  as CO
+database    "herdr-projects board"        as BD
+participant "worker"                      as WK
+
+== 事件进入收件箱 ==
+GL -> FL : POST /gitlab（MR opened）
+activate FL
+FL -> FL : 验签 · 归一 envelope
+FL -> AI : source event
+deactivate FL
+activate AI
+AI -> AI : 去重 · 订阅匹配 · 写 inbox
+
+== 唤醒 coordinator ==
+AI -> FL : POST /activation（四字段，不带正文）
+activate FL
+FL -> CO : herdr agent prompt sw-coordinator\n（只携带 newEntryCount）
+deactivate FL
+deactivate AI
+
+== 判断、进件、派工 ==
+activate CO
+CO -> CO : 查等待表 wake_condition
+alt 未命中
+  CO -> CO : 条目留待，不烧钱
+else 命中（过授权门）
+  CO -> AI : inbox read（取正文）
+  activate AI
+  AI --> CO : 事件内容
+  deactivate AI
+  CO -> BD : 建 board task + brief
+  CO -> AI : ack --through（进件即销账）
+end
+deactivate CO
+
+BD -> WK : 派工（brief）
+activate WK
+WK -> WK : 执行 run（只读 brief）
+WK -> BD : 完成线 · 评审门 · 合并
+deactivate WK
+
+note right of CO
+  flume 只搬运和叫醒
+  read / 进件 / ack 归 coordinator
+  worker 的世界里只有 brief
+end note
+
+@enduml
+```
+
+只有 flume 是 launchd 的常驻入口；AgentInbox daemon 由 flume ensure，coordinator
+属于 herdr-projects 的运行态。等待表判据和排错见 [`docs/USAGE.md`](docs/USAGE.md)。
