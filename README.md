@@ -4,117 +4,111 @@
 
 事件源、收件箱和唤醒器都是可替换的角色；GitLab、AgentInbox 和 herdr 只是当前的一组实现。flume 不定义这些产品，也不把它们的模型写进项目定义。
 
-[使用指南 → docs/USAGE.md](docs/USAGE.md) · [架构与替换点 → docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · [卸载 → docs/REMOVAL.md](docs/REMOVAL.md)
+[使用指南 → docs/USAGE.md](docs/USAGE.md) · [架构 → docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · [Adapter 与扩展 → docs/ADAPTERS.md](docs/ADAPTERS.md) · [卸载 → docs/REMOVAL.md](docs/REMOVAL.md)
 
-## 目的与意义
-
-本地 agent 需要感知外部系统的事件，但不能把轮询、SDK、webhook、重试和回调路由都
-吸进 runtime。connector gravity 一旦进入 agent 侧，每接一个系统就多一份长期维护
-成本。
-
-flume 把这些事件搬到 agent 的收件箱。agent 侧不再轮询外部系统；可靠性语义交给收件箱，唤醒后的判断留在 agent 侧。
+## 当前接线
 
 ```text
-事件源 ──事件──▶ flume ──统一 envelope──▶ 收件箱
-                 验签·归一·喂入                 │
-                                                │ 收件箱通知
-                                                ▼
-agent 唤醒器 ◀──flume 只转发唤醒── flume /activation
+GitLab webhook → flume → AgentInbox → herdr-projects coordinator
+                                      （sw-coordinator）
 ```
 
 flume 只做四件事：**验签**、**归一**、**喂入收件箱**、**转发唤醒**。它不排队、
 不重试、不持久化，也不决定是否开 turn。
 
-当前接线（2026-10-26，试点，不是项目定义）：内网 GitLab（`git.n.xiaomi.com`）
-发 webhook → flume → AgentInbox source event → herdr `activation_only` 唤醒门。
-`src/adapters/index.ts` 的 `Adapter` 注册表目前只有 `gitlab`；`src/core.ts` 的
-`FeedFunction` 当前喂给 AgentInbox；`src/activation.ts` 当前转发给 herdr。三处
-替换边界与尚未完全解耦的部分见[架构文档](docs/ARCHITECTURE.md)。
-
-## 快速安装
-
-Node.js 版本与当前的 `@holon-run/agentinbox` 实现保持一致：`^22.23.4 || ^24.22.1 || >=26.12.1`。Node.js 23.x / 25.x 不在依赖声明的支持范围内。
-
-从仓库根目录安装为全局 `flume` 命令：
-
-```bash
-npm ci          # 安装 devDependencies；prepack 的 tsc 要用
-npm i -g .      # 安装为全局 flume 命令
-flume --help
-```
-
-**期望输出**
-
-```text
-Usage: flume start
-```
-
-当前仓库尚未发布，不要用 `npm install -g flume` 安装，否则会拿到 npm 上的同名包。
-如果全局 bin 不在 `PATH`，用 `npm prefix -g` 查看前缀后将其加入 `PATH`；也可改用
-`npm i -g . --prefix "$HOME/.local"`，命令会装到 `~/.local/bin/flume`。
-需要登录常驻时，按
-[USAGE 的常驻安装一节](docs/USAGE.md#常驻安装launchd)配置 LaunchAgent。
+当前只适配 GitLab。AgentInbox 由 flume 自动启动或 attach，不需要单独常驻；
+唤醒直接执行 `herdr agent prompt sw-coordinator`，没有额外的唤醒门进程。
 
 ## 快速启动
 
-以下命令演示**当前接线**：GitLab 事件源、AgentInbox 收件箱、herdr 唤醒器。先在
-同一个 shell 中启动 AgentInbox daemon，并创建示例使用的 GitLab source：
+需要 Node.js `^22.23.4 || ^24.22.1 || >=26.12.1`，以及已安装的 herdr。
+GitLab webhook token 放在系统钥匙串：
 
-```bash
-agentinbox daemon start
-HOST_ID="$(agentinbox host add local_event flume-quickstart | node -pe 'JSON.parse(require("fs").readFileSync(0, "utf8")).hostId')"
-export AGENTINBOX_SOURCE_ID="$(agentinbox source add "$HOST_ID" events gitlab | node -pe 'JSON.parse(require("fs").readFileSync(0, "utf8")).sourceId')"
-export FLUME_GITLAB_TOKEN=local-smoke-token
-flume start
+```text
+service=flume-gitlab-webhook account=flume
 ```
 
-保持这个终端运行；本流程会输出 `agentinbox attached`。在另一个终端确认 HTTP 入口：
+然后在仓库根目录执行：
 
 ```bash
-curl -sS http://127.0.0.1:9420/healthz
+./run-flume.sh
 ```
 
-**期望输出**
+脚本会自动安装依赖、构建、启动 flume，并启动或连接 AgentInbox。默认监听
+`0.0.0.0:19420`，默认唤醒 `herdr-projects` 的 `sw-coordinator`。确认服务：
+
+```bash
+curl -sS http://127.0.0.1:19420/healthz
+```
 
 ```json
 {"ok":true}
 ```
 
-投递一条最小的 GitLab Merge Request webhook：
+## 配置 GitLab Webhook
+
+日常只需要配置 GitLab。打开 `olap/miergo` 的项目 Webhook 页面：
+
+<https://git.n.xiaomi.com/olap/miergo/-/hooks>
+
+| 项 | 值 |
+| :--- | :--- |
+| URL | `http://10.224.202.16:19420/gitlab` |
+| Secret token | 与钥匙串中的 `flume-gitlab-webhook` 一致 |
+| Trigger | Merge request / Pipeline / Comments / Issues / Push |
+| SSL verification | URL 是 HTTP，关闭 |
+
+保存后点 **Test → Merge request events**；返回 `2xx` 即已接入。GitLab 必须能访问
+flume 所在机器的内网地址，不能填 `127.0.0.1`。
+
+## 默认配置
+
+默认值全部写在 [`run-flume.sh`](run-flume.sh)，不读取 `~/.config/flume`。需要变更时
+直接改脚本，或在启动前设置同名环境变量。用户通常不需要配置 AgentInbox。
+
+| 变量 | 默认值 | 什么时候改 |
+| :--- | :--- | :--- |
+| `AGENTINBOX_SOURCE_ID` | `src_kdafkw75ry7k` | 换一个 AgentInbox source 时 |
+| `FLUME_GITLAB_TOKEN` | 从 Keychain 读取 | 本地测试或换 token 时 |
+| `FLUME_BIND` | `0.0.0.0` | 只允许本机访问时改 `127.0.0.1` |
+| `FLUME_PORT` | `19420` | 端口冲突时；GitLab URL 要同步修改 |
+| `FLUME_HERDR_WAKE_AGENT` | `sw-coordinator` | 换 herdr-projects 的 coordinator 时 |
+| `HERDR_BIN_PATH` | `/Users/mi/.local/bin/herdr` | herdr 安装位置不同时 |
+| `FLUME_HERDR_WAKE_TIMEOUT` | `10` | 唤醒命令经常超时时 |
+
+`FLUME_HERDR_WAKE_URL` 只用于对接非 herdr 的外部 HTTP 唤醒器；当前部署不需要设置。
+完整语义见 [`docs/USAGE.md` 的配置一节](docs/USAGE.md#配置)。
+
+## 常驻运行
+
+macOS 登录自启只需要一个 launchd job：`com.flume.gitlab`。plist 放在
+`~/Library/LaunchAgents` 是 launchd 的用户级入口要求；仓库里的
+[`deploy/com.flume.gitlab.plist`](deploy/com.flume.gitlab.plist) 只负责调用
+`run-flume.sh`，配置仍只有脚本这一份。
 
 ```bash
-curl -sS -X POST http://127.0.0.1:9420/gitlab \
-  -H 'Content-Type: application/json' \
-  -H 'X-Gitlab-Token: local-smoke-token' \
-  -H 'X-Gitlab-Event: Merge Request Hook' \
-  -H 'X-Gitlab-Event-UUID: local-smoke-mr-1' \
-  --data-binary '{"object_kind":"merge_request","project":{"path_with_namespace":"group/project"},"object_attributes":{"iid":123,"action":"open","state":"opened","updated_at":"2026-10-26 09:00:00 UTC"}}' \
-  -w '\nstatus=%{http_code}\n'
+mkdir -p logs
+ln -sf "$PWD/deploy/com.flume.gitlab.plist" \
+  "$HOME/Library/LaunchAgents/com.flume.gitlab.plist"
+launchctl bootstrap "gui/$(id -u)" \
+  "$HOME/Library/LaunchAgents/com.flume.gitlab.plist"
 ```
 
-**期望输出**
+日志在 `logs/flume.launchd.log` 和 `logs/flume.launchd.err.log`。检查、重启和卸载见
+[`docs/USAGE.md`](docs/USAGE.md) 与 [`docs/REMOVAL.md`](docs/REMOVAL.md)。
 
-```text
-{"accepted":1}
-status=202
-```
+## Adapters
 
-## 配置清单
+当前支持的 adapter 只有 GitLab：
 
-全部通过环境变量配置。常驻部署可用权限为 `600` 的 `FLUME_ENV_FILE` 补充变量；缺必填项
-时进程直接以退出码 2 失败。token 不进仓库、日志、响应体、plist 或命令行。下表中的
-AgentInbox、GitLab 和 herdr 名称都属于当前实现，不是通用转运层的固定术语。
+| 系统 | Webhook 路径 | Secret |
+| :--- | :--- | :--- |
+| GitLab | `POST /gitlab` | `FLUME_GITLAB_TOKEN` |
 
-| 变量 | 是否必填 | 说明 | 默认值 |
-| :--- | :--- | :--- | :--- |
-| `AGENTINBOX_SOURCE_ID` | 是 | 当前收件箱 AgentInbox 的目标 source | 无 |
-| `FLUME_GITLAB_TOKEN` | 是 | 当前事件源 adapter 的 GitLab webhook Secret token | 无 |
-| `FLUME_BIND` | 否 | 监听地址；接内网 GitLab 时用 `0.0.0.0` | `127.0.0.1` |
-| `FLUME_PORT` | 否 | 监听端口 | `9420` |
-| `FLUME_HERDR_WAKE_URL` | 否 | 当前唤醒器 herdr 唤醒门的绝对 HTTP(S) URL | 未配置 |
-| `FLUME_HERDR_WAKE_TIMEOUT` | 否 | 唤醒门调用超时，单位秒 | `5` |
-| `FLUME_ENV_FILE` | 否 | 权限必须为 `600` 的 `KEY=value` 文件 | 未配置 |
-| `FLUME_AGENTINBOX_AUTOSTART` | 否 | `0` 表示只等待并 attach 独立 AgentInbox daemon，不自举 | `1` |
+新增 adapter 只需实现 `NAME`、`SECRET_ENV`、`verify`、`normalize` 四个导出，再加入
+`src/adapters/index.ts` 的注册表。完整示例见 [`docs/ADAPTERS.md`](docs/ADAPTERS.md)。
 
-修改位置：前台运行改 shell 环境变量，常驻运行改 `FLUME_ENV_FILE` 指向的文件。各变量的
-完整语义、安全边界和常驻配置见 [`docs/USAGE.md` 的配置详解](docs/USAGE.md#配置详解)。
+## 运行链路
+
+`GitLab → flume → AgentInbox → flume /activation → herdr coordinator` 的模块调用
+序列图、等待表判据和排错见 [`docs/USAGE.md`](docs/USAGE.md)。
