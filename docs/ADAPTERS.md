@@ -4,8 +4,8 @@
 
 | 系统 | Webhook 路径 | Secret 环境变量 | 事件 |
 | :--- | :--- | :--- | :--- |
-| GitHub | `POST /github` | `FLUME_GITHUB_SECRET` | Pull request、Review、Review comment、Issue、Issue comment、Push、Workflow run |
-| GitLab | `POST /gitlab` | `FLUME_GITLAB_TOKEN` | Merge request、Pipeline、Note、Push、Issue，其他事件归一为 `<object_kind>.received` |
+| GitHub（示例） | `POST /github` | `FLUME_GITHUB_SECRET` | Pull request、Review、Review comment、Issue、Issue comment、Push、Workflow run |
+| GitLab（可选） | `POST /gitlab` | `FLUME_GITLAB_TOKEN` | Merge request、Pipeline、Note、Push、Issue，其他事件归一为 `<object_kind>.received` |
 
 用 `FLUME_ADAPTERS` 选择启用的来源（逗号分隔）。未启用的路径返回 404，也不会要求
 它的 secret。

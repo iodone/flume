@@ -1,33 +1,76 @@
 # flume 使用指南
 
-flume 是零状态事件转运层：**验签 → 归一成统一 envelope → 喂进收件箱 → 转发唤醒**。事件源、收件箱和唤醒器都是可替换角色；当前接线是 GitHub、AgentInbox 和 herdr。
+flume 是零状态事件转运层：**验签 → 归一成统一 envelope → 喂进收件箱 → 转发唤醒**。
 
-```text
-GitHub webhook → flume → AgentInbox → flume /activation
-                                      → herdr coordinator
-                                        （FLUME_HERDR_WAKE_AGENT）
+核心是 **flume + AgentInbox**：flume 负责接入和搬运，AgentInbox 负责去重、持久化、订阅、inbox 和 activation。事件源和唤醒器可替换；GitHub 和 herdr 是当前示例。
+
+## 1. 快速安装
+
+### 前置条件
+
+- Node.js `^22.23.4 || ^24.22.1 || >=26.12.1`
+- 一个可用的唤醒目标；当前示例是 herdr
+- 能访问 flume 监听地址的事件源；当前示例是 GitHub
+
+依赖和构建由 [`run-flume.sh`](../run-flume.sh) 在首次启动时自动完成。配置只有一处：脚本里的默认值，以及启动前设置的同名环境变量。没有 `~/.config/flume`，也没有第二份配置文件。
+
+### 安装步骤
+
+1. 按第 3 节写入 webhook secret。
+2. 按第 3 节配置事件源 webhook。
+3. 按第 3 节复制并配置 agent intake skill。
+4. 启动：
+
+```bash
+FLUME_AGENTINBOX_INTAKE_SKILL=/path/to/your-agent/.agents/skills/workflow-event-intake/SKILL.md \
+./run-flume.sh
 ```
 
-用户只需要配置环境变量、GitHub webhook 和 agent 侧的 intake skill，然后启动 [`run-flume.sh`](../run-flume.sh)。AgentInbox 由 flume 自动启动或 attach，不需要单独安装、启动或配置；也没有独立的唤醒门进程。
+脚本会自解析仓库路径、读取 secret，并在缺少依赖或构建产物时自动执行 `npm install` / `npm run build`。
 
-## 1. 环境变量
+## 2. 流程：一条 GitHub PR 事件
 
-所有默认值都在 [`run-flume.sh`](../run-flume.sh)。需要变更时直接改脚本，或在启动前设置同名环境变量。这样前台启动、launchd 和 CI 走同一个入口，不依赖某个用户目录；没有 `~/.config/flume`，也没有第二份配置文件。
+主序列图只在 README 维护：[一条 GitHub PR 事件的完整时序](../README.md#event-flow)。
+
+这里补充每一步的细节。GitHub 是事件源示例；换成其他 adapter 后，flume、AgentInbox 和 agent 侧的处理方式不变。
+
+场景：`owner/repo#42` 由 `ada` 打开，你是 requested reviewer。
+
+1. GitHub 发出 `pull_request.opened`，`POST /github`。
+2. flume 用 `X-Hub-Signature-256` 验签，归一成 `{source:"github", event:"pull_request.opened", subject:"owner/repo#42", payload:{...}}`。
+3. flume 调用 AgentInbox source event 接口；AgentInbox 按 `X-GitHub-Delivery` 去重、匹配 subscription、写入 inbox entry。
+4. AgentInbox 向 flume `POST /activation`，只带 `kind/newEntryCount/latestEntryId/summary`，不带正文。
+5. flume 校验字段后执行唤醒命令；prompt 只带 `agentId`、`newEntryCount` 和 intake skill 路径，不包含 PR 正文。
+6. coordinator 醒来后读取 inbox，按 `envelope.source` 加载 `sources/github.md`。
+7. source policy 把事件映射成 `REVIEW_REQUEST`：PR 作者不是你，你是 requested reviewer 或 assignee，且不是 draft。
+8. coordinator 在任务系统建 review task；brief 包含 PR URL、head sha、author、base branch、entry id、dedupe key，并指定项目自己的 `review` playbook。
+9. review worker 建 worktree、读取人类评论和 diff、按项目流程分析代码、写 review 文档；是否发 review comment 由授权决定。不 approve、不 request changes、不 merge。
+10. coordinator 只 `ack --through` 自己实际审过的 entry。
+
+如果 `ada` 后来提交了 review：
+
+- `pull_request_review.submitted`（`approved` / `changes_requested` / `commented`）→ `FEEDBACK`。
+- `pull_request_review_comment.created` 或 PR 上的 `issue_comment.created` → `FEEDBACK`。
+- coordinator 按 `headRefName` 找回对应 task；task 空闲时把原文 `tell` 过去，不自动 merge。
+
+## 3. 配置
+
+所有默认值都在 [`run-flume.sh`](../run-flume.sh)。需要变更时直接改脚本，或在启动前设置同名环境变量。这样前台启动、launchd 和 CI 走同一个入口，不依赖某个用户目录。
 
 | 变量 | 默认值 | 用途 |
 | :--- | :--- | :--- |
 | `FLUME_ADAPTERS` | `github` | 启用的事件源，逗号分隔：`github`、`gitlab` 或 `github,gitlab` |
-| `AGENTINBOX_SOURCE_ID` | 脚本内配置 | AgentInbox 的 source id；用来把事件写进同一个 source 并匹配订阅，通常不用改 |
+| `AGENTINBOX_SOURCE_ID` | 见 `run-flume.sh` | AgentInbox 的 source id；用来把事件写进同一个 source 并匹配订阅，通常不用改 |
 | `FLUME_GITHUB_SECRET` | 从 Keychain 读取 | GitHub webhook secret；非 macOS 或本地测试时可直接用环境变量 |
 | `FLUME_GITLAB_TOKEN` | 未设置 | 仅在启用 `gitlab` adapter 时需要 |
 | `FLUME_BIND` | `0.0.0.0` | 监听地址；只允许本机访问时改 `127.0.0.1` |
-| `FLUME_PORT` | `19420` | 监听端口；修改后 GitHub webhook URL 要同步修改 |
-| `FLUME_HERDR_WAKE_AGENT` | 脚本内配置 | herdr 的 coordinator agent，不是 workspace 名 |
-| `FLUME_AGENTINBOX_AGENT_ID` | 脚本内配置 | coordinator 在 AgentInbox 中的 agent id，用于读取和确认 inbox |
+| `FLUME_PORT` | `19420` | 监听端口；修改后 webhook URL 要同步修改 |
+| `FLUME_HERDR_WAKE_AGENT` | 见 `run-flume.sh` | 唤醒器使用的 coordinator agent，不是 workspace 名 |
+| `FLUME_AGENTINBOX_AGENT_ID` | 见 `run-flume.sh` | coordinator 在 AgentInbox 中的 agent id，用于读取和确认 inbox |
 | `FLUME_AGENTINBOX_INTAKE_SKILL` | **必填，无内置默认** | 指向你自己配置过的 `SKILL.md`；flume 只传路径，不执行；缺失时拒绝启动 |
-| `HERDR_BIN_PATH` | 脚本内配置 | herdr 可执行文件路径 |
-| `FLUME_HERDR_WAKE_TIMEOUT` | `10` | `herdr agent prompt` 超时，单位秒 |
-| `FLUME_HERDR_WAKE_URL` | 未设置 | 仅对接外部 HTTP 唤醒器；当前 herdr 接线不需要 |
+| `HERDR_BIN_PATH` | 见 `run-flume.sh` | 唤醒器可执行文件路径；换唤醒器时不使用 |
+| `FLUME_HERDR_WAKE_TIMEOUT` | `10` | 唤醒命令超时，单位秒 |
+| `FLUME_HERDR_WAKE_URL` | 未设置 | 仅对接外部 HTTP 唤醒器；当前 herdr 示例不需要 |
 
 AgentInbox 的 source 和订阅属于内部接线，正常运行不需要用户操作；通常只改 `FLUME_ADAPTERS`、webhook secret 和 `FLUME_AGENTINBOX_INTAKE_SKILL`。
 
@@ -39,7 +82,7 @@ FLUME_PORT=19421 ./run-flume.sh
 
 ### GitHub webhook secret
 
-macOS 默认从系统钥匙串读取：
+macOS 示例从系统钥匙串读取：
 
 ```text
 service=flume-github-webhook account=flume
@@ -64,7 +107,7 @@ security delete-generic-password -a flume -s flume-github-webhook
 
 不使用 macOS 时，启动前直接设置 `FLUME_GITHUB_SECRET` 即可。secret 不写入仓库、日志或 plist。
 
-## 2. 接收事件：GitHub Webhook
+### GitHub webhook
 
 打开仓库的 **Settings → Webhooks → Add webhook**：
 
@@ -79,23 +122,9 @@ URL 必须是 GitHub 能访问到的地址，不能写 `127.0.0.1`。如果改�
 
 flume 验签使用 `X-Hub-Signature-256`，并以 `X-GitHub-Delivery` 作为 `native_id`。同一投递重复 redeliver 会由 AgentInbox 去重。
 
-GitLab 是可选 adapter：设置 `FLUME_ADAPTERS=gitlab` 和 `FLUME_GITLAB_TOKEN`，webhook 指向 `POST /gitlab`。详见 [`ADAPTERS.md`](ADAPTERS.md)。
-
-## 3. 处理事件：agent + skill
-
-### 没有默认 skill
+### agent intake skill
 
 flume 不附带可直接生效的 intake skill，也不把 `templates/` 当成默认策略。模板只用于参考和复制；每个部署必须自己配置。
-
-启动前必须满足：
-
-```bash
-FLUME_AGENTINBOX_INTAKE_SKILL=/path/to/your-agent/.agents/skills/workflow-event-intake/SKILL.md
-```
-
-该路径不存在时 `run-flume.sh` 会拒绝启动。
-
-### 配置步骤
 
 1. 复制模板到 agent workspace：
 
@@ -108,9 +137,7 @@ FLUME_AGENTINBOX_INTAKE_SKILL=/path/to/your-agent/.agents/skills/workflow-event-
 3. 设置 `FLUME_AGENTINBOX_INTAKE_SKILL` 指向复制后的 `SKILL.md`。
 4. 重启 flume，让新路径进入 activation prompt。
 
-### skill 做什么
-
-activation 只是叫醒，不带正文。coordinator 的固定动作：
+skill 的职责：
 
 1. `agentinbox inbox read` 读未 ack 条目，最多 50 条。
 2. 按 `envelope.source` 分组，加载 `sources/<source>.md`。
@@ -125,15 +152,6 @@ activation 只是叫醒，不带正文。coordinator 的固定动作：
 
 intake 只决定“做不做、做哪个 task”，不复制 review 步骤。真正的 review 由任务自己的 `review` playbook 执行；反馈继续由原 task 自己的 playbook 执行。
 
-模板只是参考，不是默认策略：
-
-```text
-templates/workflow-event-intake/
-  SKILL.md              # 通用 intake：read → classify → route → ack
-  sources/github.md     # GitHub 事件映射、gh 命令、work/<n> 约定
-  sources/gitlab.md     # GitLab 事件映射、glab 命令
-```
-
 GitHub 的参考映射（按你的配置修改 `sources/github.md`）：
 
 | GitHub 事件 | intent | 动作 |
@@ -145,23 +163,25 @@ GitHub 的参考映射（按你的配置修改 `sources/github.md`）：
 | merged / closed | `LIFECYCLE` | 更新或关闭 task |
 | push、workflow_run、重复投递 | `NOISE` | 审阅后 ack |
 
+### GitLab（可选）
+
+GitLab 是第二个 adapter 示例：
+
+```bash
+FLUME_ADAPTERS=gitlab \
+FLUME_GITLAB_TOKEN='<token>' \
+FLUME_AGENTINBOX_INTAKE_SKILL=/path/to/your-agent/.agents/skills/workflow-event-intake/SKILL.md \
+./run-flume.sh
+```
+
+webhook 指向 `POST /gitlab`。完整 adapter 说明见 [`ADAPTERS.md`](ADAPTERS.md)。
+
 ## 4. 启动与验证
-
-### 前置条件
-
-- Node.js `^22.23.4 || ^24.22.1 || >=26.12.1`
-- 已安装 herdr；路径由 `HERDR_BIN_PATH` 指定
-- 已按第 1 节配置 webhook secret
-- 已按第 3 节配置 intake skill
-
-### 一条命令启动
 
 ```bash
 FLUME_AGENTINBOX_INTAKE_SKILL=/path/to/your-agent/.agents/skills/workflow-event-intake/SKILL.md \
 ./run-flume.sh
 ```
-
-脚本会自解析仓库路径、从 Keychain 取 secret，并在缺少依赖或构建产物时自动执行 `npm install` / `npm run build`。
 
 首次启动且本机没有 AgentInbox daemon 时：
 
@@ -185,6 +205,13 @@ curl -sS http://127.0.0.1:19420/healthz
 {"ok":true}
 ```
 
+然后按顺序验证：
+
+1. GitHub webhook 的 **Redeliver** 返回 `2xx`。
+2. 日志里能看到 `accepted event=…` 和 `woke …`。
+3. coordinator 空闲后，任务系统里出现由 inbox 聚合出的 task。
+4. 处理完成后 `agentinbox inbox read --agent-id <agent-id> --limit 10` 应该为空；没 ack 的条目说明 coordinator 还没审完。
+
 本地冒烟测试不会读取真实 AgentInbox：
 
 ```bash
@@ -193,88 +220,7 @@ npm run smoke
 
 期望最后一行是 `smoke: passed`。
 
-## 5. 模块调用序列
-
-```plantuml
-@startuml
-title 一条 GitHub PR 事件的运行链路
-
-actor       "GitHub"                      as GH
-participant "flume"                       as FL
-participant "AgentInbox daemon"           as AI
-participant "herdr coordinator"           as CO
-database    "task system"                 as BD
-participant "worker"                      as WK
-
-== 事件进入收件箱 ==
-GH -> FL : POST /github（PR opened）
-activate FL
-FL -> FL : 验签 · 归一 envelope
-FL -> AI : source event
-deactivate FL
-activate AI
-AI -> AI : 去重 · 订阅匹配 · 写 inbox
-
-== 唤醒 coordinator ==
-AI -> FL : POST /activation（四字段，不带正文）
-activate FL
-FL -> CO : herdr agent prompt <coordinator-agent>\n（agentId + newEntryCount + intakeSkill）
-deactivate FL
-deactivate AI
-
-== 读取、聚合、进件 ==
-activate CO
-CO -> AI : inbox read（有界批次）
-activate AI
-AI --> CO : unacked entries
-deactivate AI
-CO -> CO : 加载 workflow-event-intake
-CO -> CO : 按 envelope.source 映射 intent
-CO -> BD : REVIEW_REQUEST 建 task · FEEDBACK tell 已有 task
-CO -> AI : ack --through（只确认已审条目）
-deactivate CO
-
-BD -> WK : review task 直接派工
-activate WK
-WK -> WK : 执行项目 review playbook
-WK -> BD : review 文档 · verdict · 完成线
-deactivate WK
-
-note right of CO
-  flume 只搬运和叫醒
-  read / 聚合 / 进件 / ack 归 coordinator
-  worker 的世界里只有 brief
-end note
-
-@enduml
-```
-
-这里只有 flume 是 launchd 的常驻入口；AgentInbox daemon 由 flume ensure，coordinator 属于 herdr 的运行态。没有额外的 wake gate 服务。coordinator 的 turn 是串行的：它正在处理别的请求时，activation 会排队到当前 turn 结束，不会丢。
-
-## 6. AgentInbox 与唤醒语义
-
-AgentInbox 写 inbox 后向 flume `/activation` 发送：
-
-```json
-{
-  "kind": "agentinbox.activation",
-  "newEntryCount": 2,
-  "latestEntryId": "entry-local-smoke",
-  "summary": "2 new GitHub events"
-}
-```
-
-flume 只接受上述四个字段。`newEntryCount == 0` 返回 `202 {"accepted":0}`，不唤醒；大于 `0` 时执行：
-
-```text
-herdr agent prompt <coordinator-agent> "<固定唤醒文本>"
-```
-
-prompt 只包含配置中的 `agentId`、经过校验的 `newEntryCount`、intake skill 路径和固定指令，不包含事件正文。`latestEntryId` 和 `summary` 只用于日志。coordinator 收到后用 AgentInbox skill 读取 inbox，并读取 `FLUME_AGENTINBOX_INTAKE_SKILL` 指向的策略文件；事件内容仍必须回 AgentInbox 读取。
-
-如果设置 `FLUME_HERDR_WAKE_AGENT=""` 并改用 `FLUME_HERDR_WAKE_URL`，flume 会向该 URL POST 四个字段并带 `X-Flume-Activation-Mode: activation_only`。这是非 herdr 唤醒器的兼容模式，不是当前部署路径。
-
-## 7. 常驻运行
+## 5. 常驻运行
 
 `launchd` 不是必须的。前台运行只需要 `./run-flume.sh`；只有 macOS 登录自启才需要用户级 LaunchAgent。
 
@@ -318,13 +264,32 @@ unlink "$HOME/Library/LaunchAgents/com.flume.plist"
 
 `~/.agentinbox` 可能被其他 agent 共用；确认不再需要后再删除。完整撤除见 [`REMOVAL.md`](REMOVAL.md)。
 
-## 8. Adapters
+## 6. AgentInbox 与唤醒语义
+
+AgentInbox 写 inbox 后向 flume `/activation` 发送：
+
+```json
+{
+  "kind": "agentinbox.activation",
+  "newEntryCount": 2,
+  "latestEntryId": "entry-local-smoke",
+  "summary": "2 new GitHub events"
+}
+```
+
+flume 只接受上述四个字段。`newEntryCount == 0` 返回 `202 {"accepted":0}`，不唤醒；大于 `0` 时执行唤醒命令。
+
+prompt 只包含配置中的 `agentId`、经过校验的 `newEntryCount`、intake skill 路径和固定指令，不包含事件正文。`latestEntryId` 和 `summary` 只用于日志。coordinator 收到后用 AgentInbox skill 读取 inbox，并读取 `FLUME_AGENTINBOX_INTAKE_SKILL` 指向的策略文件；事件内容仍必须回 AgentInbox 读取。
+
+如果设置 `FLUME_HERDR_WAKE_AGENT=""` 并改用 `FLUME_HERDR_WAKE_URL`，flume 会向该 URL POST 四个字段并带 `X-Flume-Activation-Mode: activation_only`。这是非 herdr 唤醒器的兼容模式，不是当前示例路径。
+
+## 7. Adapters
 
 当前支持 GitHub 和 GitLab：
 
 | 系统 | 路由 | Secret 环境变量 | 事件 |
 | :--- | :--- | :--- | :--- |
-| GitHub | `POST /github` | `FLUME_GITHUB_SECRET` | Pull request、Review、Review comment、Issue、Issue comment、Push、Workflow run |
+| GitHub（示例） | `POST /github` | `FLUME_GITHUB_SECRET` | Pull request、Review、Review comment、Issue、Issue comment、Push、Workflow run |
 | GitLab | `POST /gitlab` | `FLUME_GITLAB_TOKEN` | Merge request、Pipeline、Note、Push、Issue；其他事件归一为 `<object_kind>.received` |
 
 新增 adapter 的完整示例见 [`ADAPTERS.md`](ADAPTERS.md)。快速步骤：
@@ -338,7 +303,7 @@ unlink "$HOME/Library/LaunchAgents/com.flume.plist"
 
 adapter 只验签和折 envelope，不排队、不重试、不落盘、不做订阅过滤、不决定唤醒。
 
-## 9. 端点
+## 8. 端点
 
 | 方法 | 路径 | 结果 |
 | :--- | :--- | :--- |
@@ -349,7 +314,7 @@ adapter 只验签和折 envelope，不排队、不重试、不落盘、不做订
 
 flume 不重试：事件失败交给事件源重投，activation 失败交给 AgentInbox 重投。
 
-## 10. 排错
+## 9. 排错
 
 | 现象 | 检查 |
 | :--- | :--- |
@@ -360,9 +325,9 @@ flume 不重试：事件失败交给事件源重投，activation 失败交给 Ag
 | GitHub Delivery 超时 | GitHub 到 flume 主机没有可达路由；不要用 `127.0.0.1` 作为 Webhook URL |
 | `401 {"error":"invalid token"}` | GitHub Webhook Secret 与 Keychain 中的值不一致 |
 | `502 {"error":"feed failed"}` | `AGENTINBOX_SOURCE_ID` 不存在或 AgentInbox 拒收 |
-| `502 {"error":"wake gate failed"}` | `herdr agent prompt` 失败；检查 agent 名、`HERDR_BIN_PATH` 和超时 |
+| `502 {"error":"wake gate failed"}` | 唤醒命令失败；检查 agent 名、`HERDR_BIN_PATH` 和超时 |
 | 返回 `202` 但 inbox 为空 | AgentInbox source 没有订阅到目标 agent |
-| inbox 有条目但 herdr 没醒 | 检查 `FLUME_HERDR_WAKE_AGENT`、herdr 可执行文件和 `/activation` 日志 |
+| inbox 有条目但 agent 没醒 | 检查 `FLUME_HERDR_WAKE_AGENT`、唤醒器可执行文件和 `/activation` 日志 |
 | 请求返回 `413 {"error":"body too large"}` | webhook body 超过 8 MiB |
 
 验证时优先使用 GitHub 的 Redeliver 或真实 PR 事件，不要只在本机 curl `/healthz`。
