@@ -36,7 +36,7 @@ flume                   校验四字段 · 调用唤醒器
 | 事件源（当前 GitLab） | 产生事件、按自身机制投递重试 | — |
 | flume | 接收、验签、归一、无状态喂入、唤醒转发、进程入口 | 队列、重试、去重、持久化、唤醒决策 |
 | 收件箱（当前 AgentInbox） | durable stream、native-id 去重、订阅过滤、inbox/ack、唤醒租约 | 业务判据 |
-| agent 侧（当前 herdr） | turn 队列、任务语义、是否建 board task | 事件接入细节 |
+| agent 侧（当前 herdr） | turn 队列；`workflow-event-intake` 的 read/classify/route/ack；`workflow-dsx` 的任务编排 | 事件接入细节 |
 
 ## 2. 三条红线
 
@@ -76,14 +76,30 @@ brief，不知道 AgentInbox 存在。
 herdr agent prompt sw-coordinator "<固定唤醒文本>"
 ```
 
-prompt 只包含配置中的 `agentId`、经过校验的 `newEntryCount`、部署侧 intake skill
-路径和固定指令；`latestEntryId` 和 `summary` 留在 flume 日志中。coordinator 用
-AgentInbox skill 读取 inbox，再读取 `FLUME_AGENTINBOX_INTAKE_SKILL` 指向的策略文件。
-当前策略是 `system-weaver/.agents/skills/workflow-gitlab-event-intake/SKILL.md`：
-review 请求会建并派工 system-weaver review task；评审反馈会按 MR branch 找回原
-board task 并继续；状态噪声只 ack。策略可以显式允许 review task 派工，但
-approve / merge / close 仍需要明确的人类指令。
-`entries` / `items` 等正文一旦出现在 activation payload 中，flume 直接返回 400。
+prompt 只包含配置中的 `agentId`、经过校验的 `newEntryCount`、intake skill 路径和
+固定指令；`latestEntryId` 和 `summary` 留在 flume 日志中。flume **不执行、不解析**
+这个 skill，只把路径交给 agent。coordinator 用 AgentInbox skill 读取 inbox，再读取
+`FLUME_AGENTINBOX_INTAKE_SKILL` 指向的策略文件。
+
+agent 侧分三层：
+
+```text
+coordinator
+  └─ workflow-event-intake        dispatcher：read → classify → route → ack
+      ├─ sources/<source>.md      source adapter：事件到 intent、命令、去重键
+      └─ workflow-dsx             task orchestration：playbook、角色、门槛、verdict
+          └─ playbooks/review.md  review 的具体流程
+```
+
+intake 只决定“做不做、做哪个 task”：`REVIEW_REQUEST` 建 task 并派工，
+`FEEDBACK` 找回已有 task 并把原文交回去，`ISSUE_UPDATE` 交回已有 task 或入队，
+`LIFECYCLE` 更新/关闭 task，`NOISE` 只 ack。review 的判据和步骤不在 intake 里，
+由 `workflow-dsx` 的 `review` playbook 执行。策略可以显式允许 review task 派工，
+但 approve / merge / close 仍需要明确的人类指令。
+
+flume 仓库自带 `templates/workflow-event-intake/` 作为模板；部署可以复制后修改
+`sources/gitlab.md`，也可以用自己的 skill 路径覆盖。`entries` / `items` 等正文一旦
+出现在 activation payload 中，flume 直接返回 400。
 
 `sw-coordinator` 是 `herdr-projects` workspace 的 coordinator agent 名，不是
 workspace 名。超时由 `FLUME_HERDR_WAKE_TIMEOUT` 控制。

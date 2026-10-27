@@ -62,16 +62,42 @@ curl -sS http://127.0.0.1:19420/healthz
 保存后点 **Test → Merge request events**；返回 `2xx` 即已接入。GitLab 必须能访问
 flume 所在机器的内网地址，不能填 `127.0.0.1`。
 
-## 事件如何落地
+## 唤醒后 agent 怎么处理事件
 
-coordinator 读取 inbox 后，按 `system-weaver/.agents/skills/workflow-gitlab-event-intake/SKILL.md` 处理：
+flume 只负责叫醒，不解析业务。activation 带 `intakeSkill=<path>`，agent 收到后：
 
-| 事件 | 动作 |
-| :--- | :--- |
-| 我被指定 reviewer/assignee 的 open MR | 在 `system-weaver` 建 review task 并立即派工；review 在 `review/worktrees/<group-project>/mr-<iid>` 里做 |
-| 我自己的 MR 出现他人 note | 按 `work/<n>-...` 找回 board task，把原始 note 直接交给任务 agent 继续 |
-| 已关联 task 的 issue 变动 | 把原始变动交给对应 task |
-| pipeline 状态、重复投递、已合并/关闭事件 | 审阅后作为噪声 ack，不建 task |
+1. `agentinbox inbox read` 读未 ack 条目；activation 里没有事件正文。
+2. 按 `envelope.source` 加载 `sources/<source>.md`。
+3. 把事件映射成 intent：`REVIEW_REQUEST` / `FEEDBACK` / `ISSUE_UPDATE` /
+   `LIFECYCLE` / `NOISE`。
+4. 按 intent 路由：
+   - review 请求 → 在 board 建 review task 并 `--delegate`
+   - 我的 MR 有反馈或 approve/unapprove → 找回已有 task，原文 `tell`
+   - issue 变动 → 找回已关联 task；新 issue 只入队
+   - merged/closed/噪声 → 更新状态或 ack
+5. `ack --through` 最后一条实际审过的 entry。
+
+review 的执行不在 intake 里：intake 只把 task 交给 `workflow-dsx` 的 `review`
+playbook。flume 不执行、也不解析这个 skill，只把路径传给唤醒 prompt。
+
+flume 仓库自带模板：
+
+- `templates/workflow-event-intake/SKILL.md` — 通用 intake 流程
+- `templates/workflow-event-intake/sources/gitlab.md` — GitLab 映射示例
+
+复制到 agent workspace 后，改 `sources/gitlab.md` 里的 `ME`、`BOARD_REPO`、
+`REVIEW_ROOT`、`BOARD_SHORT_KEY`，再把 `FLUME_AGENTINBOX_INTAKE_SKILL` 指向你的
+`SKILL.md`。新增来源只加 `sources/<source>.md`，不动 intake 主流程和 dsx。
+
+当前 GitLab 映射：
+
+| GitLab 事件 | intent | 动作 |
+| :--- | :--- | :--- |
+| 我是 reviewer/assignee 的 open MR | `REVIEW_REQUEST` | 建 review task 并立即派工；worktree 在 `review/worktrees/<group-project>/mr-<iid>` |
+| 我的 MR 出现他人 note / approve / unapprove | `FEEDBACK` | 按 `work/<n>-...` 找回 task，原文交给 agent；不自动 merge |
+| 已关联 task 的 issue 变动 | `ISSUE_UPDATE` | 把原始变动交给对应 task；新 issue 只入队 |
+| merged / closed | `LIFECYCLE` | 更新或关闭 task |
+| pipeline、重复投递、无关事件 | `NOISE` | 审阅后 ack |
 
 review task 只读项目代码，可以按既有常设授权发布 review 评论；不 approve、不 merge、
 不 close。原有两个 cron 巡检已被这条事件驱动链路取代。
@@ -97,7 +123,7 @@ review task 只读项目代码，可以按既有常设授权发布 review 评论
 | `FLUME_PORT` | `19420` | 端口冲突时；GitLab URL 要同步修改 |
 | `FLUME_HERDR_WAKE_AGENT` | `sw-coordinator` | 换 herdr-projects 的 coordinator 时 |
 | `FLUME_AGENTINBOX_AGENT_ID` | `herdr-main` | 换 coordinator 的 AgentInbox agent 时 |
-| `FLUME_AGENTINBOX_INTAKE_SKILL` | `system-weaver/.agents/skills/workflow-gitlab-event-intake/SKILL.md` | 换事件路由策略时 |
+| `FLUME_AGENTINBOX_INTAKE_SKILL` | 部署侧 skill；缺失时回退到 `templates/workflow-event-intake/SKILL.md` | agent 侧事件路由策略；flume 只传路径，不执行 |
 | `HERDR_BIN_PATH` | `/Users/mi/.local/bin/herdr` | herdr 安装位置不同时 |
 | `FLUME_HERDR_WAKE_TIMEOUT` | `10` | 唤醒命令经常超时时 |
 
@@ -168,8 +194,9 @@ CO -> AI : inbox read（有界批次）
 activate AI
 AI --> CO : unacked entries
 deactivate AI
-CO -> CO : 按 project/resource 聚合
-CO -> BD : 只把可执行事件建/更新为 task
+CO -> CO : 加载 workflow-event-intake
+CO -> CO : 按 envelope.source 映射 intent
+CO -> BD : REVIEW_REQUEST 建 task · FEEDBACK tell 已有 task
 CO -> AI : ack --through（只确认已审条目）
 deactivate CO
 

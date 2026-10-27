@@ -8,6 +8,16 @@
 
 `/healthz` 和 `/activation` 是 core 端点，不属于 adapter。
 
+Adapter 分两层，不要混：
+
+| 层 | 位置 | 负责 |
+| :--- | :--- | :--- |
+| flume adapter | `src/adapters/<name>.ts` | webhook 验签、归一成 envelope |
+| agent source policy | `templates/workflow-event-intake/sources/<name>.md` | envelope 到 intent、task 映射、命令 |
+
+flume adapter 只保证 `source` 和 `event` 稳定；review / feedback / issue 的语义
+由 agent 侧的 intake skill 解释。新增来源时两层可以独立扩展。
+
 ## 契约
 
 一个 adapter 只需要四个导出：

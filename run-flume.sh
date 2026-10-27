@@ -18,8 +18,14 @@ export FLUME_PORT="${FLUME_PORT:-19420}"
 export FLUME_HERDR_WAKE_AGENT="${FLUME_HERDR_WAKE_AGENT-sw-coordinator}"
 # AgentInbox 中 coordinator 的 agent id；用于读取和确认 inbox。
 export FLUME_AGENTINBOX_AGENT_ID="${FLUME_AGENTINBOX_AGENT_ID:-herdr-main}"
-# 部署侧的 GitLab 事件 intake 策略；不存在时 activation 使用通用兜底规则。
-export FLUME_AGENTINBOX_INTAKE_SKILL="${FLUME_AGENTINBOX_INTAKE_SKILL:-$SYSTEM_WEAVER_ROOT/.agents/skills/workflow-gitlab-event-intake/SKILL.md}"
+# agent 侧的 event intake 策略；flume 只把路径传给唤醒 prompt，不执行它。
+# 优先使用部署实例，缺失时回退到仓库自带模板。
+DEPLOYED_INTAKE_SKILL="$SYSTEM_WEAVER_ROOT/.agents/skills/workflow-gitlab-event-intake/SKILL.md"
+TEMPLATE_INTAKE_SKILL="$ROOT/templates/workflow-event-intake/SKILL.md"
+if [[ ! -f "$DEPLOYED_INTAKE_SKILL" && -f "$TEMPLATE_INTAKE_SKILL" ]]; then
+  DEPLOYED_INTAKE_SKILL="$TEMPLATE_INTAKE_SKILL"
+fi
+export FLUME_AGENTINBOX_INTAKE_SKILL="${FLUME_AGENTINBOX_INTAKE_SKILL:-$DEPLOYED_INTAKE_SKILL}"
 export HERDR_BIN_PATH="${HERDR_BIN_PATH:-/Users/mi/.local/bin/herdr}"
 export FLUME_HERDR_WAKE_TIMEOUT="${FLUME_HERDR_WAKE_TIMEOUT:-10}"
 

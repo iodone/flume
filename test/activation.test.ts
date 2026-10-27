@@ -276,6 +276,8 @@ test("calls herdr agent prompt directly when wakeAgent is configured", async () 
     assert.match(args, /newEntryCount=1/);
     assert.match(args, /intakeSkill=\/tmp\/workflow-gitlab-event-intake\/SKILL\.md/);
     assert.match(args, /Read and follow \/tmp\/workflow-gitlab-event-intake\/SKILL\.md/);
+    assert.match(args, /only a wake signal/);
+    assert.match(args, /does not contain event bodies/);
     assert.match(args, /Process this activation now/);
     assert.match(args, /standing authorization/);
     assert.match(args, /at most 50 entries/);
