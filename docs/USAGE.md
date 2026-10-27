@@ -223,7 +223,7 @@ CO -> BD : 只把可执行事件建/更新为 task
 CO -> AI : ack --through（只确认已审条目）
 deactivate CO
 
-BD -> WK : 按 board 设置派工（activation 不自动放行）
+BD -> WK : 按 intake 策略 / board 设置派工（review 请求直接派工）
 activate WK
 WK -> WK : 执行 run（只读 brief）
 WK -> BD : 完成线 · 评审门 · 合并
