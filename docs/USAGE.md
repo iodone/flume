@@ -38,7 +38,7 @@ unset FLUME_GITLAB_TOKEN
 ```
 
 脚本会自解析仓库路径、从 Keychain 取 token，并在缺少依赖或构建产物时自动执行
-`npm install` / `npm run build`。默认配置见[配置](#配置)，不需要另外维护 env 文件。
+`npm install` / `npm run build`。默认配置见[配置](#配置)。
 
 首次启动且本机没有 AgentInbox daemon 时：
 
@@ -106,8 +106,7 @@ glab api --hostname git.n.xiaomi.com --method POST \
 ## 配置
 
 所有默认值都在 [`run-flume.sh`](../run-flume.sh)。需要变更时直接改脚本，或在启动前
-设置同名环境变量；不存在 `~/.config/flume`。AgentInbox 的 source 和订阅属于内部
-接线，正常运行不需要用户操作。
+设置同名环境变量。AgentInbox 的 source 和订阅属于内部接线，正常运行不需要用户操作。
 
 | 变量 | 默认值 | 用途 |
 | :--- | :--- | :--- |

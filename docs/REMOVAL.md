@@ -93,8 +93,6 @@ security delete-generic-password \
   -a flume -s flume-gitlab-webhook
 ```
 
-当前部署不使用 `~/.config/flume/flume.env`；不需要清理该文件。
-
 ## 6. 清理日志与仓库
 
 确认日志不再需要后：

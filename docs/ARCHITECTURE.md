@@ -249,8 +249,7 @@ adapter 只验签和折 envelope，不排队、不重试、不落盘、不做过
 
 GitLab webhook token 的人工维护源是 Keychain：
 `service=flume-gitlab-webhook account=flume`。`run-flume.sh` 读取后只传给 flume
-进程；token 不进入仓库、plist、日志或命令行。`FLUME_ENV_FILE` 仍保留为嵌入场景的
-兼容能力，当前部署不使用。
+进程；token 不进入仓库、plist 或日志。
 
 AgentInbox 的 host/source/subscription 属于一次性控制面配置，由部署者维护；
 日常运行和文档中的用户入口都不需要操作它。
