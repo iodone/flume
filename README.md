@@ -18,6 +18,7 @@ flume 只做四件事：**验签**、**归一**、**喂入收件箱**、**转发
 
 当前只适配 GitLab。AgentInbox 由 flume 自动启动或 attach，不需要单独常驻；
 唤醒直接执行 `herdr agent prompt sw-coordinator`，没有额外的唤醒门进程。
+activation 会带上部署侧的 GitLab intake skill 路径，coordinator 按它路由事件。
 
 ## 快速启动
 
@@ -61,6 +62,20 @@ curl -sS http://127.0.0.1:19420/healthz
 保存后点 **Test → Merge request events**；返回 `2xx` 即已接入。GitLab 必须能访问
 flume 所在机器的内网地址，不能填 `127.0.0.1`。
 
+## 事件如何落地
+
+coordinator 读取 inbox 后，按 `system-weaver/.agents/skills/workflow-gitlab-event-intake/SKILL.md` 处理：
+
+| 事件 | 动作 |
+| :--- | :--- |
+| 我被指定 reviewer/assignee 的 open MR | 在 `system-weaver` 建 review task 并立即派工；review 在 `review/worktrees/<group-project>/mr-<iid>` 里做 |
+| 我自己的 MR 出现他人 note | 按 `work/<n>-...` 找回 board task，把原始 note 直接交给任务 agent 继续 |
+| 已关联 task 的 issue 变动 | 把原始变动交给对应 task |
+| pipeline 状态、重复投递、已合并/关闭事件 | 审阅后作为噪声 ack，不建 task |
+
+review task 只读项目代码，可以按既有常设授权发布 review 评论；不 approve、不 merge、
+不 close。原有两个 cron 巡检已被这条事件驱动链路取代。
+
 ## 验证
 
 1. `curl -sS http://127.0.0.1:19420/healthz` 返回 `{"ok":true}`。
@@ -82,6 +97,7 @@ flume 所在机器的内网地址，不能填 `127.0.0.1`。
 | `FLUME_PORT` | `19420` | 端口冲突时；GitLab URL 要同步修改 |
 | `FLUME_HERDR_WAKE_AGENT` | `sw-coordinator` | 换 herdr-projects 的 coordinator 时 |
 | `FLUME_AGENTINBOX_AGENT_ID` | `herdr-main` | 换 coordinator 的 AgentInbox agent 时 |
+| `FLUME_AGENTINBOX_INTAKE_SKILL` | `system-weaver/.agents/skills/workflow-gitlab-event-intake/SKILL.md` | 换事件路由策略时 |
 | `HERDR_BIN_PATH` | `/Users/mi/.local/bin/herdr` | herdr 安装位置不同时 |
 | `FLUME_HERDR_WAKE_TIMEOUT` | `10` | 唤醒命令经常超时时 |
 
@@ -142,7 +158,7 @@ AI -> AI : 去重 · 订阅匹配 · 写 inbox
 == 唤醒 coordinator ==
 AI -> FL : POST /activation（四字段，不带正文）
 activate FL
-FL -> CO : herdr agent prompt sw-coordinator\n（agentId + newEntryCount + 固定 intake 指令）
+FL -> CO : herdr agent prompt sw-coordinator\n（agentId + newEntryCount + intake skill）
 deactivate FL
 deactivate AI
 

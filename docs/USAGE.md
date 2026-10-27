@@ -116,6 +116,7 @@ glab api --hostname git.n.xiaomi.com --method POST \
 | `FLUME_PORT` | `19420` | 监听端口；修改后同步 GitLab webhook URL |
 | `FLUME_HERDR_WAKE_AGENT` | `sw-coordinator` | `herdr-projects` 的 coordinator agent，不是 workspace 名 |
 | `FLUME_AGENTINBOX_AGENT_ID` | `herdr-main` | coordinator 在 AgentInbox 中的 agent id，用于读取和确认 inbox |
+| `FLUME_AGENTINBOX_INTAKE_SKILL` | `system-weaver/.agents/skills/workflow-gitlab-event-intake/SKILL.md` | 事件路由策略文件；换部署或换路由规则时 |
 | `HERDR_BIN_PATH` | `/Users/mi/.local/bin/herdr` | herdr 可执行文件路径 |
 | `FLUME_HERDR_WAKE_TIMEOUT` | `10` | `herdr agent prompt` 超时，单位秒 |
 | `FLUME_HERDR_WAKE_URL` | 未设置 | 仅对接外部 HTTP 唤醒器；当前 herdr 接线不需要 |
@@ -207,7 +208,7 @@ AI -> AI : 去重 · 订阅匹配 · 写 inbox
 == 唤醒 coordinator ==
 AI -> FL : POST /activation（四字段，不带正文）
 activate FL
-FL -> CO : herdr agent prompt sw-coordinator\n（agentId + newEntryCount + 固定 intake 指令）
+FL -> CO : herdr agent prompt sw-coordinator\n（agentId + newEntryCount + intake skill）
 deactivate FL
 deactivate AI
 
@@ -261,12 +262,22 @@ flume 只接受上述四个字段。`newEntryCount == 0` 返回 `202 {"accepted"
 herdr agent prompt sw-coordinator "<固定唤醒文本>"
 ```
 
-prompt 只包含配置中的 `agentId`、经过校验的 `newEntryCount` 和固定 intake 指令，
-不包含事件正文。`latestEntryId` 和 `summary` 只用于日志。coordinator 收到后用
-AgentInbox skill 读取 inbox、按 project/resource 聚合事件；对需要落地的工作按
-workflow-dsx 建或更新 board task，并只 ack 实际审过的条目；事件内容仍必须回
-AgentInbox 读取。建/更新 board task 是部署时的常设授权，coordinator 不需要再向人
-确认；派工、approve、merge 仍需要明确的人类指令。
+prompt 只包含配置中的 `agentId`、经过校验的 `newEntryCount`、intake skill 路径和
+固定指令，不包含事件正文。`latestEntryId` 和 `summary` 只用于日志。coordinator
+收到后用 AgentInbox skill 读取 inbox，并读取 `FLUME_AGENTINBOX_INTAKE_SKILL` 指向的
+策略文件；事件内容仍必须回 AgentInbox 读取。
+
+当前策略 `system-weaver/.agents/skills/workflow-gitlab-event-intake/SKILL.md`：
+
+| 事件 | 动作 |
+| :--- | :--- |
+| 我是 reviewer/assignee 的 open MR | 在 `system-weaver` 建 review task 并立即派工；worktree 在 `review/worktrees/<group-project>/mr-<iid>` |
+| 我的 MR 出现他人 note | 按 `work/<n>-...` 找回 board task，把原始 note 交给任务 agent |
+| 已关联 task 的 issue 变动 | 把原始变动交给对应 task |
+| 状态噪声、重复投递、已关闭对象 | 审阅后 ack，不建 task |
+
+review task 只读项目代码，可以按既有常设授权发布 review 评论；不 approve、不 merge、
+不 close。原有两个 cron 巡检已由这条事件驱动链路取代。
 
 如果设置 `FLUME_HERDR_WAKE_AGENT=""` 并改用 `FLUME_HERDR_WAKE_URL`，flume 会向该
 URL POST 四个字段并带 `X-Flume-Activation-Mode: activation_only`。这是非 herdr

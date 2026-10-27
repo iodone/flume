@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+SYSTEM_WEAVER_ROOT="$(cd "$ROOT/../.." && pwd)"
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 if ! command -v node >/dev/null 2>&1; then
@@ -17,8 +18,14 @@ export FLUME_PORT="${FLUME_PORT:-19420}"
 export FLUME_HERDR_WAKE_AGENT="${FLUME_HERDR_WAKE_AGENT-sw-coordinator}"
 # AgentInbox 中 coordinator 的 agent id；用于读取和确认 inbox。
 export FLUME_AGENTINBOX_AGENT_ID="${FLUME_AGENTINBOX_AGENT_ID:-herdr-main}"
+# 部署侧的 GitLab 事件 intake 策略；不存在时 activation 使用通用兜底规则。
+export FLUME_AGENTINBOX_INTAKE_SKILL="${FLUME_AGENTINBOX_INTAKE_SKILL:-$SYSTEM_WEAVER_ROOT/.agents/skills/workflow-gitlab-event-intake/SKILL.md}"
 export HERDR_BIN_PATH="${HERDR_BIN_PATH:-/Users/mi/.local/bin/herdr}"
 export FLUME_HERDR_WAKE_TIMEOUT="${FLUME_HERDR_WAKE_TIMEOUT:-10}"
+
+if [[ ! -f "$FLUME_AGENTINBOX_INTAKE_SKILL" ]]; then
+  echo "flume: intake skill not found at $FLUME_AGENTINBOX_INTAKE_SKILL; using generic fallback" >&2
+fi
 
 if [[ -z "${FLUME_GITLAB_TOKEN:-}" ]]; then
   if ! command -v security >/dev/null 2>&1; then

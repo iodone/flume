@@ -177,18 +177,23 @@ export async function dispatchHerdrPrompt(
   activation: Activation,
   timeoutMs: number = DEFAULT_WAKE_TIMEOUT_MS,
   inboxAgent?: string,
+  intakeSkill?: string,
 ): Promise<void> {
   const prompt = [
     "A flume activation arrived for AgentInbox.",
     ...(inboxAgent ? [`agentId=${inboxAgent}`] : []),
     `newEntryCount=${activation.newEntryCount}`,
+    ...(intakeSkill ? [`intakeSkill=${intakeSkill}`] : []),
     "",
     "Process this activation now:",
     "- This is the configured AgentInbox intake path and a standing authorization from the deployment. Do not ask for confirmation before creating or updating board tasks from reviewed entries.",
-    "- Use the installed agentinbox skill. Read the unacked inbox in a bounded batch.",
+    ...(intakeSkill
+      ? [`- Read and follow ${intakeSkill}. It is the deployment's GitLab event intake policy. If it is missing, use the fallback rules below.`]
+      : []),
+    "- Use the installed agentinbox skill. Read the unacked inbox in a bounded batch (at most 50 entries).",
     "- Group related events by project/resource. Create or update herdr-projects tasks only for actionable work; ignore status-only noise.",
     "- For any work that results, follow workflow-dsx.",
-    "- Do not delegate, approve, merge, or discard work without explicit human instruction.",
+    "- Delegate only when the intake policy explicitly allows it. Never approve, merge, close, or discard work without explicit human instruction.",
     "- Ack only the entries you actually reviewed; never use `ack --all`.",
     "- Reply with entries reviewed, tasks added/updated, entries acked, and anything ambiguous.",
   ].join("\n");

@@ -253,6 +253,7 @@ test("calls herdr agent prompt directly when wakeAgent is configured", async () 
     ...CONFIG,
     wakeAgent: "sw-coordinator",
     inboxAgent: "herdr-main",
+    intakeSkill: "/tmp/workflow-gitlab-event-intake/SKILL.md",
     herdrBin,
     wakeTimeoutMs: 2_000,
   });
@@ -273,10 +274,14 @@ test("calls herdr agent prompt directly when wakeAgent is configured", async () 
     assert.match(args, /^agent\nprompt\nsw-coordinator\n/);
     assert.match(args, /agentId=herdr-main/);
     assert.match(args, /newEntryCount=1/);
+    assert.match(args, /intakeSkill=\/tmp\/workflow-gitlab-event-intake\/SKILL\.md/);
+    assert.match(args, /Read and follow \/tmp\/workflow-gitlab-event-intake\/SKILL\.md/);
     assert.match(args, /Process this activation now/);
     assert.match(args, /standing authorization/);
+    assert.match(args, /at most 50 entries/);
     assert.match(args, /herdr-projects tasks/);
     assert.match(args, /follow workflow-dsx/);
+    assert.match(args, /Delegate only when the intake policy explicitly allows it/);
     assert.match(args, /never use `ack --all`/);
     assert.doesNotMatch(args, /Reply exactly/);
   } finally {

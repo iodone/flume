@@ -76,11 +76,13 @@ brief，不知道 AgentInbox 存在。
 herdr agent prompt sw-coordinator "<固定唤醒文本>"
 ```
 
-prompt 只包含配置中的 `agentId`、经过校验的 `newEntryCount` 和固定 intake 指令；
-`latestEntryId` 和 `summary` 留在 flume 日志中。coordinator 用 AgentInbox skill
-读取 inbox、按 project/resource 聚合事件；对需要落地的工作按 workflow-dsx 建或
-更新 board task，并只 ack 实际审过的条目。建/更新 task 是部署时的常设授权；
-派工、approve、merge 仍需要明确的人类指令。
+prompt 只包含配置中的 `agentId`、经过校验的 `newEntryCount`、部署侧 intake skill
+路径和固定指令；`latestEntryId` 和 `summary` 留在 flume 日志中。coordinator 用
+AgentInbox skill 读取 inbox，再读取 `FLUME_AGENTINBOX_INTAKE_SKILL` 指向的策略文件。
+当前策略是 `system-weaver/.agents/skills/workflow-gitlab-event-intake/SKILL.md`：
+review 请求会建并派工 system-weaver review task；评审反馈会按 MR branch 找回原
+board task 并继续；状态噪声只 ack。策略可以显式允许 review task 派工，但
+approve / merge / close 仍需要明确的人类指令。
 `entries` / `items` 等正文一旦出现在 activation payload 中，flume 直接返回 400。
 
 `sw-coordinator` 是 `herdr-projects` workspace 的 coordinator agent 名，不是
@@ -285,4 +287,5 @@ AgentInbox 的 host/source/subscription 属于一次性控制面配置，由部�
 - 不做事件存储或回放——由 AgentInbox durable stream 负责。
 - 不做业务过滤——由 AgentInbox subscription 负责。
 - 不做唤醒策略（退避、租约、攒批）——由 AgentInbox 通知策略和 herdr turn 调度负责。
+- 不做定时全量巡检——GitLab 变更由 webhook → AgentInbox activation 驱动。
 - 不 import AgentInbox 内部模块、不 fork、不融仓库。

@@ -36,6 +36,7 @@ export interface Config {
   wakeUrl?: string;
   wakeAgent?: string;
   inboxAgent?: string;
+  intakeSkill?: string;
   herdrBin?: string;
   wakeTimeoutMs?: number;
 }
@@ -77,6 +78,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
     wakeUrl: env.FLUME_HERDR_WAKE_URL?.trim() || undefined,
     wakeAgent: env.FLUME_HERDR_WAKE_AGENT?.trim() || undefined,
     inboxAgent: env.FLUME_AGENTINBOX_AGENT_ID?.trim() || undefined,
+    intakeSkill: env.FLUME_AGENTINBOX_INTAKE_SKILL?.trim() || undefined,
     herdrBin: env.HERDR_BIN_PATH?.trim() || "herdr",
     wakeTimeoutMs: timeoutSeconds * 1_000,
   };
@@ -283,6 +285,7 @@ async function handleActivation(
         activation,
         timeoutMs,
         config.inboxAgent,
+        config.intakeSkill,
       );
     } else {
       await dispatchActivation(config.wakeUrl!, activation, timeoutMs);
