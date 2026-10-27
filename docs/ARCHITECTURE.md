@@ -198,9 +198,9 @@ flume 内部唯一事件形状，adapter 负责把各家 payload 折成它：
 - 没有 daemon 且允许 autostart → spawn `agentinbox serve` 并 owned。
 - 禁止 autostart → 等待已有 daemon，超时退出。
 
-生产环境只有一个用户级 LaunchAgent；当前部署 label 是 `com.flume.gitlab`（启用了
-`FLUME_ADAPTERS=gitlab`），GitHub 接入时用 `com.flume.github` 并设成 `github`。它
-调用仓库中的 `run-flume.sh`。AgentInbox 不单独建 launchd job，也不是第三个常驻服务。
+生产环境只有一个用户级 LaunchAgent；label 固定为 `com.flume`。事件源不影响 job
+名称，当前部署通过 `FLUME_ADAPTERS=gitlab` 启用 GitLab，接 GitHub 时只改这个变量。
+它调用仓库中的 `run-flume.sh`。AgentInbox 不单独建 launchd job，也不是第三个常驻服务。
 
 ### 5.2 feed 接缝
 
@@ -265,10 +265,10 @@ adapter 只验签和折 envelope，不排队、不重试、不落盘、不做过
 
 | 项 | 当前值 |
 | :--- | :--- |
-| launchd label | `com.flume.gitlab`（GitHub 接入用 `com.flume.github`） |
+| launchd label | `com.flume` |
 | 入口 | `<repo>/run-flume.sh` |
-| plist | `<repo>/deploy/com.flume.gitlab.plist` |
-| 用户级软链 | `~/Library/LaunchAgents/com.flume.gitlab.plist` |
+| plist | `<repo>/deploy/com.flume.plist` |
+| 用户级软链 | `~/Library/LaunchAgents/com.flume.plist` |
 | 日志 | `<repo>/logs/flume.launchd.log`、`.err.log` |
 | AgentInbox | 由 flume 启动或 attach，无独立 job |
 | 唤醒 | `herdr agent prompt sw-coordinator` |

@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.flume.gitlab</string>
+    <string>com.flume</string>
     <key>ProgramArguments</key>
     <array>
         <string>/Users/mi/work/system-weaver/projects/flume/run-flume.sh</string>

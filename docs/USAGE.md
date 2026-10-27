@@ -280,25 +280,23 @@ prompt 只包含配置中的 `agentId`、经过校验的 `newEntryCount`、intak
 
 `~/Library/LaunchAgents` 是 launchd 扫描用户级 job 的固定位置，所以那里必须有一个 plist 或指向仓库 plist 的软链。它不是第二份配置，配置仍在 `run-flume.sh` 和环境变量里。
 
-仓库里的 `deploy/com.flume.gitlab.plist` 是当前部署示例。接 GitHub 时复制一份并改 `Label`、`ProgramArguments`、`FLUME_ADAPTERS` 和 `FLUME_AGENTINBOX_INTAKE_SKILL`：
+仓库里的 `deploy/com.flume.plist` 就是 flume 进程的 launchd 入口，label 固定为 `com.flume`。事件源不影响 job 名称；切换 GitHub / GitLab 只改 `EnvironmentVariables`：
 
 ```bash
-cp deploy/com.flume.gitlab.plist deploy/com.flume.github.plist
-# Label=com.flume.github
 # ProgramArguments=/absolute/path/to/flume/run-flume.sh
-# FLUME_ADAPTERS=github
+# FLUME_ADAPTERS=github   # 或 gitlab
 # FLUME_AGENTINBOX_INTAKE_SKILL=/path/to/your-agent/.agents/skills/workflow-event-intake/SKILL.md
 mkdir -p logs
-ln -sf "$PWD/deploy/com.flume.github.plist" \
-  "$HOME/Library/LaunchAgents/com.flume.github.plist"
+ln -sf "$PWD/deploy/com.flume.plist" \
+  "$HOME/Library/LaunchAgents/com.flume.plist"
 launchctl bootstrap "gui/$(id -u)" \
-  "$HOME/Library/LaunchAgents/com.flume.github.plist"
+  "$HOME/Library/LaunchAgents/com.flume.plist"
 ```
 
 查看状态和日志：
 
 ```bash
-launchctl print "gui/$(id -u)/com.flume.github" | grep -E 'state =|pid ='
+launchctl print "gui/$(id -u)/com.flume" | grep -E 'state =|pid ='
 curl -fsS http://127.0.0.1:19420/healthz
 tail -f logs/flume.launchd.log
 tail -f logs/flume.launchd.err.log
@@ -308,14 +306,14 @@ tail -f logs/flume.launchd.err.log
 
 ```bash
 git pull
-launchctl kickstart -k "gui/$(id -u)/com.flume.github"
+launchctl kickstart -k "gui/$(id -u)/com.flume"
 ```
 
 停止并移除自启：
 
 ```bash
-launchctl bootout "gui/$(id -u)/com.flume.github" 2>/dev/null || true
-unlink "$HOME/Library/LaunchAgents/com.flume.github.plist"
+launchctl bootout "gui/$(id -u)/com.flume" 2>/dev/null || true
+unlink "$HOME/Library/LaunchAgents/com.flume.plist"
 ```
 
 `~/.agentinbox` 可能被其他 agent 共用；确认不再需要后再删除。完整撤除见 [`REMOVAL.md`](REMOVAL.md)。

@@ -276,23 +276,16 @@ end note
 
 `~/Library/LaunchAgents` 是 launchd 扫描用户级 job 的固定位置，所以那里必须有一个 plist 或指向仓库 plist 的软链。它不是第二份配置，配置仍在 `run-flume.sh` 和环境变量里。
 
-仓库里的 [`deploy/com.flume.gitlab.plist`](deploy/com.flume.gitlab.plist) 是当前部署示例。接 GitHub 时复制一份并改这几项：
-
-```text
-Label                  → com.flume.github
-ProgramArguments       → 本仓库 run-flume.sh 的绝对路径
-FLUME_ADAPTERS         → github
-FLUME_AGENTINBOX_INTAKE_SKILL → 你复制后的 SKILL.md 绝对路径
-```
+仓库里的 [`deploy/com.flume.plist`](deploy/com.flume.plist) 就是 flume 进程的 launchd 入口，label 固定为 `com.flume`。事件源不影响 job 名称；接 GitHub 还是 GitLab，只改 `EnvironmentVariables` 里的 `FLUME_ADAPTERS` 和 `FLUME_AGENTINBOX_INTAKE_SKILL`。
 
 加载：
 
 ```bash
 mkdir -p logs
-ln -sf "$PWD/deploy/com.flume.github.plist" \
-  "$HOME/Library/LaunchAgents/com.flume.github.plist"
+ln -sf "$PWD/deploy/com.flume.plist" \
+  "$HOME/Library/LaunchAgents/com.flume.plist"
 launchctl bootstrap "gui/$(id -u)" \
-  "$HOME/Library/LaunchAgents/com.flume.github.plist"
+  "$HOME/Library/LaunchAgents/com.flume.plist"
 ```
 
 日志在 `logs/flume.launchd.log` 和 `logs/flume.launchd.err.log`。重启和卸载见 [`docs/USAGE.md`](docs/USAGE.md) 与 [`docs/REMOVAL.md`](docs/REMOVAL.md)。

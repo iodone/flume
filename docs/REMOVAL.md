@@ -34,7 +34,7 @@ glab api --hostname git.n.xiaomi.com projects/262378/hooks |
 常驻部署只有一个 job：
 
 ```bash
-launchctl bootout "gui/$(id -u)/com.flume.gitlab" 2>/dev/null || true
+launchctl bootout "gui/$(id -u)/com.flume" 2>/dev/null || true
 ```
 
 确认端口已关闭：
@@ -52,13 +52,13 @@ lsof -nP -iTCP:19420 -sTCP:LISTEN
 ## 3. 移除自启入口
 
 ```bash
-unlink "$HOME/Library/LaunchAgents/com.flume.gitlab.plist"
+unlink "$HOME/Library/LaunchAgents/com.flume.plist"
 ```
 
 确认 job 已不存在：
 
 ```bash
-launchctl print "gui/$(id -u)/com.flume.gitlab" 2>&1 | head
+launchctl print "gui/$(id -u)/com.flume" 2>&1 | head
 # 预期：Could not find service
 ```
 
@@ -113,7 +113,7 @@ LaunchAgent。
 test -z "$(glab api --hostname git.n.xiaomi.com projects/262378/hooks |
   jq -r '.[] | select(.url == "http://10.224.202.16:19420/gitlab") | .id')"
 
-launchctl print "gui/$(id -u)/com.flume.gitlab" 2>&1 | grep -q 'Could not find service'
+launchctl print "gui/$(id -u)/com.flume" 2>&1 | grep -q 'Could not find service'
 ```
 
 两条命令退出码均为 `0` 表示 webhook 和本地自启入口都已撤除。
