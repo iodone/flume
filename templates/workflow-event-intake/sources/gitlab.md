@@ -65,6 +65,8 @@ Skip closed or merged MRs and closed issues.
 ## Dedupe keys
 
 State file: `$REVIEW_ROOT/intake-state.json`, key `gitlab:<REPO>!<IID>`.
+The same GitLab note can be delivered more than once with different inbox
+`entryId`s. Use `(subject, note id)` as the dedupe key.
 
 For a review request, skip when both are true:
 

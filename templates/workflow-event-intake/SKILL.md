@@ -38,7 +38,10 @@ The coordinator reads it after wake.
 agentinbox inbox read --agent-id "$AGENT_ID" --limit 50 --full
 ```
 
-Record every `entryId` and the last one you actually inspect.
+Record every `entryId` and the last one you actually inspect. `entryId` identifies
+a delivery, not an event: the same source event can appear as multiple entries.
+Dedupe by the source's stable key (note id, MR head sha, issue id), never by
+`entryId` alone.
 
 ## 2. Classify
 
