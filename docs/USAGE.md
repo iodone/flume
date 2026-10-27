@@ -4,8 +4,8 @@ flume 是零状态事件转运层：**验签 → 归一成统一 envelope → �
 
 ```text
 GitHub webhook → flume → AgentInbox → flume /activation
-                                      → herdr-projects coordinator
-                                        （sw-coordinator）
+                                      → herdr coordinator
+                                        （FLUME_HERDR_WAKE_AGENT）
 ```
 
 用户只需要配置环境变量、GitHub webhook 和 agent 侧的 intake skill，然后启动 [`run-flume.sh`](../run-flume.sh)。AgentInbox 由 flume 自动启动或 attach，不需要单独安装、启动或配置；也没有独立的唤醒门进程。
@@ -17,15 +17,15 @@ GitHub webhook → flume → AgentInbox → flume /activation
 | 变量 | 默认值 | 用途 |
 | :--- | :--- | :--- |
 | `FLUME_ADAPTERS` | `github` | 启用的事件源，逗号分隔：`github`、`gitlab` 或 `github,gitlab` |
-| `AGENTINBOX_SOURCE_ID` | `src_kdafkw75ry7k` | AgentInbox 的 source id；用来把事件写进同一个 source 并匹配订阅，通常不用改 |
+| `AGENTINBOX_SOURCE_ID` | 脚本内配置 | AgentInbox 的 source id；用来把事件写进同一个 source 并匹配订阅，通常不用改 |
 | `FLUME_GITHUB_SECRET` | 从 Keychain 读取 | GitHub webhook secret；非 macOS 或本地测试时可直接用环境变量 |
 | `FLUME_GITLAB_TOKEN` | 未设置 | 仅在启用 `gitlab` adapter 时需要 |
 | `FLUME_BIND` | `0.0.0.0` | 监听地址；只允许本机访问时改 `127.0.0.1` |
 | `FLUME_PORT` | `19420` | 监听端口；修改后 GitHub webhook URL 要同步修改 |
-| `FLUME_HERDR_WAKE_AGENT` | `sw-coordinator` | herdr-projects 的 coordinator agent，不是 workspace 名 |
-| `FLUME_AGENTINBOX_AGENT_ID` | `herdr-main` | coordinator 在 AgentInbox 中的 agent id，用于读取和确认 inbox |
+| `FLUME_HERDR_WAKE_AGENT` | 脚本内配置 | herdr 的 coordinator agent，不是 workspace 名 |
+| `FLUME_AGENTINBOX_AGENT_ID` | 脚本内配置 | coordinator 在 AgentInbox 中的 agent id，用于读取和确认 inbox |
 | `FLUME_AGENTINBOX_INTAKE_SKILL` | **必填，无内置默认** | 指向你自己配置过的 `SKILL.md`；flume 只传路径，不执行；缺失时拒绝启动 |
-| `HERDR_BIN_PATH` | `/Users/mi/.local/bin/herdr` | herdr 可执行文件路径 |
+| `HERDR_BIN_PATH` | 脚本内配置 | herdr 可执行文件路径 |
 | `FLUME_HERDR_WAKE_TIMEOUT` | `10` | `herdr agent prompt` 超时，单位秒 |
 | `FLUME_HERDR_WAKE_URL` | 未设置 | 仅对接外部 HTTP 唤醒器；当前 herdr 接线不需要 |
 
@@ -116,14 +116,14 @@ activation 只是叫醒，不带正文。coordinator 的固定动作：
 2. 按 `envelope.source` 分组，加载 `sources/<source>.md`。
 3. 把事件映射成 intent：`REVIEW_REQUEST` / `FEEDBACK` / `ISSUE_UPDATE` / `LIFECYCLE` / `NOISE`。
 4. 按 intent 路由：
-   - `REVIEW_REQUEST` → 在 board 建 review task 并 `--delegate`
+   - `REVIEW_REQUEST` → 在任务系统建 review task 并派工
    - `FEEDBACK` → 找回已有 task，原始文本 `tell` 过去
    - `ISSUE_UPDATE` → 找回已关联 task；新 issue 只入队
    - `LIFECYCLE` → 更新或关闭 task
    - `NOISE` → 只 ack
 5. `ack --through` 最后一条实际审过的 entry。
 
-intake 只决定“做不做、做哪个 task”，不复制 review 步骤。真正的 review 由 `workflow-dsx` 的 `review` playbook 执行；反馈继续由原 task 自己的 playbook 执行。
+intake 只决定“做不做、做哪个 task”，不复制 review 步骤。真正的 review 由任务自己的 `review` playbook 执行；反馈继续由原 task 自己的 playbook 执行。
 
 模板只是参考，不是默认策略：
 
@@ -150,7 +150,7 @@ GitHub 的参考映射（按你的配置修改 `sources/github.md`）：
 ### 前置条件
 
 - Node.js `^22.23.4 || ^24.22.1 || >=26.12.1`
-- 已安装 herdr，默认路径 `/Users/mi/.local/bin/herdr`
+- 已安装 herdr；路径由 `HERDR_BIN_PATH` 指定
 - 已按第 1 节配置 webhook secret
 - 已按第 3 节配置 intake skill
 
@@ -202,8 +202,8 @@ title 一条 GitHub PR 事件的运行链路
 actor       "GitHub"                      as GH
 participant "flume"                       as FL
 participant "AgentInbox daemon"           as AI
-participant "herdr-projects coordinator"  as CO
-database    "herdr-projects board"        as BD
+participant "herdr coordinator"           as CO
+database    "task system"                 as BD
 participant "worker"                      as WK
 
 == 事件进入收件箱 ==
@@ -218,7 +218,7 @@ AI -> AI : 去重 · 订阅匹配 · 写 inbox
 == 唤醒 coordinator ==
 AI -> FL : POST /activation（四字段，不带正文）
 activate FL
-FL -> CO : herdr agent prompt sw-coordinator\n（agentId + newEntryCount + intakeSkill）
+FL -> CO : herdr agent prompt <coordinator-agent>\n（agentId + newEntryCount + intakeSkill）
 deactivate FL
 deactivate AI
 
@@ -236,7 +236,7 @@ deactivate CO
 
 BD -> WK : review task 直接派工
 activate WK
-WK -> WK : 执行 dsx review playbook
+WK -> WK : 执行项目 review playbook
 WK -> BD : review 文档 · verdict · 完成线
 deactivate WK
 
@@ -249,7 +249,7 @@ end note
 @enduml
 ```
 
-这里只有 flume 是 launchd 的常驻入口；AgentInbox daemon 由 flume ensure，coordinator 属于 herdr-projects 的运行态。没有额外的 wake gate 服务。coordinator 的 turn 是串行的：它正在处理别的请求时，activation 会排队到当前 turn 结束，不会丢。
+这里只有 flume 是 launchd 的常驻入口；AgentInbox daemon 由 flume ensure，coordinator 属于 herdr 的运行态。没有额外的 wake gate 服务。coordinator 的 turn 是串行的：它正在处理别的请求时，activation 会排队到当前 turn 结束，不会丢。
 
 ## 6. AgentInbox 与唤醒语义
 
@@ -267,7 +267,7 @@ AgentInbox 写 inbox 后向 flume `/activation` 发送：
 flume 只接受上述四个字段。`newEntryCount == 0` 返回 `202 {"accepted":0}`，不唤醒；大于 `0` 时执行：
 
 ```text
-herdr agent prompt sw-coordinator "<固定唤醒文本>"
+herdr agent prompt <coordinator-agent> "<固定唤醒文本>"
 ```
 
 prompt 只包含配置中的 `agentId`、经过校验的 `newEntryCount`、intake skill 路径和固定指令，不包含事件正文。`latestEntryId` 和 `summary` 只用于日志。coordinator 收到后用 AgentInbox skill 读取 inbox，并读取 `FLUME_AGENTINBOX_INTAKE_SKILL` 指向的策略文件；事件内容仍必须回 AgentInbox 读取。

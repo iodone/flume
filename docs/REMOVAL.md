@@ -1,33 +1,19 @@
-# 撤除当前接线
+# 撤除 flume 接线
 
-本文是当前 `miergo` / GitLab 部署的撤除示例。GitHub 部署只需把 webhook 页面、
-`/gitlab` 路径和 `flume-gitlab-webhook` 换成对应的 GitHub 项。
+按顺序停止新事件、删除 webhook、停止 flume、清理本地凭据。命令中的
+`<flume-host>`、`<port>`、`<agent-id>` 等替换成你的部署值。
 
-本文撤除当前试点：`olap/miergo` → flume → AgentInbox → herdr-projects coordinator。
-先停止新事件进入，再清理接收端和本地凭据。
+## 1. 删除事件源 webhook
 
-## 1. 删除 GitLab Webhook
+只删除指向本 flume 的 webhook，不要改项目上的其他 hook。
 
-先确认这是唯一指向本 flume 的项目级 hook：
+GitHub：仓库 **Settings → Webhooks**，删除 Payload URL 为
+`http://<flume-host>:<port>/github` 的 hook。
 
-<https://git.n.xiaomi.com/olap/miergo/-/hooks>
+GitLab：项目 **Settings → Webhooks**，删除 URL 为
+`http://<flume-host>:<port>/gitlab` 的 hook。
 
-本次试点的 hook ID 是 `694791`，URL 是
-`http://10.224.202.16:19420/gitlab`。在 UI 中删除，或执行：
-
-```bash
-glab api --hostname git.n.xiaomi.com --method DELETE \
-  projects/262378/hooks/694791
-```
-
-确认项目上不再有指向该 flume 的 hook：
-
-```bash
-glab api --hostname git.n.xiaomi.com projects/262378/hooks |
-  jq '.[] | {id,url}'
-```
-
-不要删除项目上原有的其他 webhook。
+确认项目上不再有指向该 flume 的 hook。
 
 ## 2. 停止 flume
 
@@ -40,10 +26,10 @@ launchctl bootout "gui/$(id -u)/com.flume" 2>/dev/null || true
 确认端口已关闭：
 
 ```bash
-curl -sS --max-time 2 http://10.224.202.16:19420/healthz
+curl -sS --max-time 2 http://127.0.0.1:<port>/healthz
 # 预期：连接失败，而不是 {"ok":true}
 
-lsof -nP -iTCP:19420 -sTCP:LISTEN
+lsof -nP -iTCP:<port> -sTCP:LISTEN
 ```
 
 如果是前台运行，只在对应终端按 `Ctrl-C`。不要用宽泛的 `pkill node`；同机可能有
@@ -68,20 +54,20 @@ flume 自举的子进程，停止 flume 后它会一起退出；若本机原本�
 
 ## 4. 清理 AgentInbox 路由（仅限专用配置）
 
-如果该 source、subscription 或 agent 还服务其他系统，跳过这一步。只删除本试点专用
-的配置：
+如果该 source、subscription 或 agent 还服务其他系统，跳过这一步。只删除本部署
+专用的配置：
 
 ```bash
-agentinbox agent target list herdr-main
-agentinbox subscription list --source-id "$AGENTINBOX_SOURCE_ID"
+agentinbox agent target list <agent-id>
+agentinbox subscription list --source-id "<source-id>"
 ```
 
 按实际 ID 删除：
 
 ```bash
-agentinbox agent target remove herdr-main <targetId>
-agentinbox subscription remove <subscriptionId>
-agentinbox agent remove herdr-main
+agentinbox agent target remove <agent-id> <target-id>
+agentinbox subscription remove <subscription-id>
+agentinbox agent remove <agent-id>
 ```
 
 不要删除共享的 `~/.agentinbox`。历史 durable stream 可以按保留策略自然过期，不需要
@@ -89,11 +75,14 @@ agentinbox agent remove herdr-main
 
 ## 5. 撤销 Secret
 
-GitLab hook 删除后，再从 Keychain 删除 token：
+事件源删除后，再从 Keychain 删除对应 secret：
 
 ```bash
-security delete-generic-password \
-  -a flume -s flume-gitlab-webhook
+# GitHub
+security delete-generic-password -a flume -s flume-github-webhook
+
+# GitLab
+security delete-generic-password -a flume -s flume-gitlab-webhook
 ```
 
 ## 6. 清理日志与仓库
@@ -110,10 +99,8 @@ LaunchAgent。
 ## 7. 撤除后确认
 
 ```bash
-test -z "$(glab api --hostname git.n.xiaomi.com projects/262378/hooks |
-  jq -r '.[] | select(.url == "http://10.224.202.16:19420/gitlab") | .id')"
-
 launchctl print "gui/$(id -u)/com.flume" 2>&1 | grep -q 'Could not find service'
+curl -sS --max-time 2 http://127.0.0.1:<port>/healthz
 ```
 
-两条命令退出码均为 `0` 表示 webhook 和本地自启入口都已撤除。
+第一条退出码为 `0`，第二条连接失败，表示本地 flume 已撤除。

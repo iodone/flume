@@ -2,7 +2,7 @@
 
 > 定位：零状态事件转运层——**验签 → 归一成统一 envelope → 喂进 agent 收件箱 →
 > 转发唤醒**。flume = 渡槽：只负责把水从这头运到那头。
-> 当前接线（不是定义）：GitHub → AgentInbox → `herdr-projects` coordinator。
+> 当前接线（不是定义）：GitHub → AgentInbox → herdr coordinator。
 > 用户入口是 `./run-flume.sh`；macOS 常驻只需要一个 launchd job。
 
 ## 0. 问题
@@ -28,7 +28,7 @@ flume                   验签 · 归一 · 喂入
 flume                   校验四字段 · 调用唤醒器
    │  herdr agent prompt
    ▼
-唤醒后的 agent 侧       herdr-projects coordinator
+唤醒后的 agent 侧       herdr coordinator
 ```
 
 | 层 | 拥有什么 | 绝不拥有 |
@@ -36,7 +36,7 @@ flume                   校验四字段 · 调用唤醒器
 | 事件源（当前 GitHub） | 产生事件、按自身机制投递重试 | — |
 | flume | 接收、验签、归一、无状态喂入、唤醒转发、进程入口 | 队列、重试、去重、持久化、唤醒决策 |
 | 收件箱（当前 AgentInbox） | durable stream、native-id 去重、订阅过滤、inbox/ack、唤醒租约 | 业务判据 |
-| agent 侧（当前 herdr） | turn 队列；`workflow-event-intake` 的 read/classify/route/ack；`workflow-dsx` 的任务编排 | 事件接入细节 |
+| agent 侧（当前 herdr） | turn 队列；`workflow-event-intake` 的 read/classify/route/ack；任务执行层的编排 | 事件接入细节 |
 
 ## 2. 三条红线
 
@@ -55,10 +55,10 @@ flume                   校验四字段 · 调用唤醒器
 3. flume 调用 AgentInbox source event 接口；`native_id` 用 `X-GitHub-Delivery`。
 4. AgentInbox 落 durable stream，按 subscription 匹配 agent，写入 inbox entry。
 5. AgentInbox 向 flume `POST /activation`，只带 `kind/newEntryCount/latestEntryId/summary`。
-6. flume 校验字段，执行 `herdr agent prompt sw-coordinator`。
-7. `herdr-projects` coordinator 收到唤醒后：
+6. flume 校验字段，执行 `herdr agent prompt <coordinator-agent>`。
+7. herdr coordinator 收到唤醒后：
    - `inbox read` 取正文（有界批次）
-   - 按 project/resource 聚合事件，只把可执行事件建/更新为 board task
+   - 按 project/resource 聚合事件，只把可执行事件建/更新为 task
    - `ack --through` 只确认已审过的条目
 
 前六步只做搬运和叫醒。`read / 进件 / ack` 三条动作归 coordinator；worker 只读
@@ -73,7 +73,7 @@ brief，不知道 AgentInbox 存在。
 当前默认路径是直接执行 herdr：
 
 ```text
-herdr agent prompt sw-coordinator "<固定唤醒文本>"
+herdr agent prompt <coordinator-agent> "<固定唤醒文本>"
 ```
 
 prompt 只包含配置中的 `agentId`、经过校验的 `newEntryCount`、intake skill 路径和
@@ -87,23 +87,23 @@ agent 侧分三层：
 coordinator
   └─ workflow-event-intake        dispatcher：read → classify → route → ack
       ├─ sources/<source>.md      source adapter：事件到 intent、命令、去重键
-      └─ workflow-dsx             task orchestration：playbook、角色、门槛、verdict
-          └─ playbooks/review.md  review 的具体流程
+      └─ task execution layer     playbook、角色、门槛、verdict
+          └─ review playbook      review 的具体流程
 ```
 
 intake 只决定“做不做、做哪个 task”：`REVIEW_REQUEST` 建 task 并派工，
 `FEEDBACK` 找回已有 task 并把原文交回去，`ISSUE_UPDATE` 交回已有 task 或入队，
 `LIFECYCLE` 更新/关闭 task，`NOISE` 只 ack。review 的判据和步骤不在 intake 里，
-由 `workflow-dsx` 的 `review` playbook 执行。策略可以显式允许 review task 派工，
-但 approve / merge / close 仍需要明确的人类指令。
+由任务执行层的 `review` playbook 执行。策略可以显式允许 review task 派工，但
+approve / merge / close 仍需要明确的人类指令。
 
 flume 仓库自带 `templates/workflow-event-intake/`，但模板不是默认 skill。部署必须
 复制到 agent workspace，修改 `sources/github.md`（或你新增的 source policy），再把
 `FLUME_AGENTINBOX_INTAKE_SKILL` 指向复制后的 `SKILL.md`。`entries` / `items` 等正文
 一旦出现在 activation payload 中，flume 直接返回 400。
 
-`sw-coordinator` 是 `herdr-projects` workspace 的 coordinator agent 名，不是
-workspace 名。超时由 `FLUME_HERDR_WAKE_TIMEOUT` 控制。
+`FLUME_HERDR_WAKE_AGENT` 是 herdr 的 coordinator agent 名，不是 workspace 名。
+超时由 `FLUME_HERDR_WAKE_TIMEOUT` 控制。
 
 ### 3.2 HTTP 唤醒兼容模式
 
@@ -259,9 +259,7 @@ adapter 只验签和折 envelope，不排队、不重试、不落盘、不做过
 
 - flume 与 AgentInbox 同机；AgentInbox 的 HTTP API 只监听 loopback/unix socket。
 - GitHub/GitLab webhook 指向 flume 的内网口；当前部署为 `0.0.0.0:19420`。
-- herdr 在哪，flume 就部署在哪；当前唤醒目标是 `herdr-projects` 的
-  `sw-coordinator`。
-- 最近一次试点：`git.n.xiaomi.com/olap/miergo` 的项目级 webhook。
+- herdr 在哪，flume 就部署在哪；唤醒目标由 `FLUME_HERDR_WAKE_AGENT` 指定。
 
 | 项 | 当前值 |
 | :--- | :--- |
@@ -271,7 +269,7 @@ adapter 只验签和折 envelope，不排队、不重试、不落盘、不做过
 | 用户级软链 | `~/Library/LaunchAgents/com.flume.plist` |
 | 日志 | `<repo>/logs/flume.launchd.log`、`.err.log` |
 | AgentInbox | 由 flume 启动或 attach，无独立 job |
-| 唤醒 | `herdr agent prompt sw-coordinator` |
+| 唤醒 | `herdr agent prompt <coordinator-agent>` |
 
 GitHub webhook secret 的人工维护源是 Keychain：
 `service=flume-github-webhook account=flume`。GitLab adapter 使用
