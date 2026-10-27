@@ -274,17 +274,14 @@ test("calls herdr agent prompt directly when wakeAgent is configured", async () 
     assert.match(args, /^agent\nprompt\nsw-coordinator\n/);
     assert.match(args, /agentId=herdr-main/);
     assert.match(args, /newEntryCount=1/);
+    assert.match(args, /latestEntryId=entry-42/);
     assert.match(args, /intakeSkill=\/tmp\/workflow-event-intake\/SKILL\.md/);
-    assert.match(args, /Read and follow \/tmp\/workflow-event-intake\/SKILL\.md/);
-    assert.match(args, /only a wake signal/);
-    assert.match(args, /does not contain event bodies/);
-    assert.match(args, /Process this activation now/);
-    assert.match(args, /standing authorization/);
+    assert.match(args, /Follow \/tmp\/workflow-event-intake\/SKILL\.md/);
+    assert.match(args, /wake signal, not the event body/);
     assert.match(args, /at most 50 entries/);
-    assert.match(args, /herdr-projects tasks/);
-    assert.match(args, /follow workflow-dsx/);
-    assert.match(args, /Delegate only when the intake policy explicitly allows it/);
-    assert.match(args, /never use `ack --all`/);
+    assert.match(args, /never `ack --all`/);
+    assert.doesNotMatch(args, /herdr-projects/);
+    assert.doesNotMatch(args, /workflow-dsx/);
     assert.doesNotMatch(args, /Reply exactly/);
   } finally {
     await close(flume);

@@ -1,61 +1,63 @@
 ---
 name: workflow-event-intake
-description: "Triggered by: A flume activation arrived for AgentInbox, event intake, inbox event. Agent-side dispatcher for flume activations: read the inbox, classify by metadata.source, dedupe, create or continue board tasks, then ack. Do NOT use for periodic full scans, task execution, or the review itself."
+description: "Route flume/AgentInbox events into board tasks. Use when a flume activation arrives, or when an inbox event must become or continue a task. Not for periodic scans or task execution."
 ---
 
 # Workflow Event Intake
 
-This is the **agent-side** policy for a flume activation. flume verifies the webhook,
-normalizes the event, writes the inbox, and wakes the agent. It does not execute this
-file, and the activation does not carry the event body.
+A flume activation is a wake signal, not the event: flume verified a webhook, wrote it
+to AgentInbox, and asked the agent to look. The body stays in the inbox.
 
-**Boundary.** This file decides *whether* an event becomes or continues a task. The
-task's own playbook decides *how* it runs. A review task's brief points at the
-project's review playbook — in this workspace `workflow-dsx/playbooks/review.md`,
-which is a standalone playbook in dsx. Do not copy review axes, verification gates,
-or code standards into this file.
+This skill is the **admission layer**. It decides which events become or continue a
+board task. It does not execute them. Every task admitted here is executed under
+`workflow-dsx`.
 
-> Template. Copy it into the agent workspace and write `sources/<source>.md` before
-> use. Nothing here is a built-in default policy.
+Intents are peers. A review request, a review comment, an issue update, and a merge
+are each one admission decision; no intent is the default.
 
-## Contract
+## Three layers
 
-- The activation carries `agentId`, `newEntryCount`, and optionally `intakeSkill`.
-  It does **not** carry the event body.
-- Always read the inbox before acting.
-- An inbox entry carries `metadata.source`, `eventVariant`, `metadata.subject`, and
-  `rawPayload`; there is no separate `envelope` field. `entryId` identifies the
-  delivery, not the event.
-- Source-specific mapping lives in `sources/<source>.md`.
-- Board commands are the ones the source policy names; do not invent a second backlog.
+| Layer | Owns | Never does |
+| :--- | :--- | :--- |
+| flume | verify, normalize, write the inbox, wake | classify, create tasks |
+| this skill | read, classify, dedupe, admit or continue, ack | implement, review, write code |
+| workflow-dsx | pick the playbook, execute, verify | decide whether an event is actionable |
 
-## Hard rules
+## Execution
 
-- Read at most 50 unacked entries per batch. Ack only `--through` the last entry you
-  actually inspected. Never `--all`.
-- Never modify project code, commit, push, approve, merge, close, or resolve from
-  intake.
-- Delegate and change task status only where the source policy explicitly authorizes
-  it. Anything else needs a human.
-- Send original text, not a summary.
-- Dedupe by the source's stable key (review id, note id, revision, issue id), never
-  by `entryId` alone: one source event can arrive as several deliveries.
-- If a mapping is uncertain, report it; do not guess.
+All admitted work runs under `workflow-dsx`. This file names the handoff; the playbook
+owns the steps.
 
-## 1. Read
+- `REVIEW_REQUEST` → `workflow-dsx/playbooks/review.md` (standalone review; nothing is
+  implemented in that run).
+- `FEEDBACK` → the task's existing playbook. If none is recorded, route with dsx's
+  `allowedNext`, falling back to `figure-it-out`.
+- `ISSUE_UPDATE` queued → no execution until a human claims it.
+- `LIFECYCLE` / `NOISE` → no execution.
+
+Do not restate dsx steps here. dsx owns execution; this file owns admission.
+
+## Process
+
+### 1. Read
 
 ```bash
 agentinbox inbox read --agent-id "$AGENT_ID" --limit 50 --full
 ```
 
-Record every `entryId` and the last one you actually inspect. That entry is the only
+Record every `entryId`, and the last one you actually inspect. That entry is the only
 legal ack boundary.
 
-## 2. Classify
+The activation carries `agentId`, `newEntryCount`, optionally `latestEntryId` and
+`intakeSkill`. It carries no event body. An inbox entry carries `metadata.source`,
+`eventVariant`, `metadata.subject`, and `rawPayload`; there is no separate `envelope`
+field.
 
-Group the batch by `metadata.source` (fall back to the `summary` field's second
-segment when a source does not set it) and load `sources/<source>.md` for that group.
-The source policy returns one of these intents:
+### 2. Classify
+
+Group the batch by `metadata.source` (fall back to the second segment of `summary` when
+a source does not set it) and load `sources/<source>.md` for that group. Each event
+maps to exactly one intent:
 
 | Intent | Meaning |
 | :--- | :--- |
@@ -67,14 +69,14 @@ The source policy returns one of these intents:
 
 If a source policy is missing, report the source and ack only after inspection.
 
-## 3. Dedupe
+### 3. Dedupe
 
-Read the intake state file the source policy names. Keys and fields are the source
-policy's; the usual shape is:
+Read the state file the source policy names. Keys and fields are the source policy's;
+the usual shape is:
 
 ```json
 {
-  "<source>:<subject>": {
+  "<subject>": {
     "head": "<revision>",
     "last_event_id": "<id>",
     "last_driven_at": "<timestamp>",
@@ -85,53 +87,53 @@ policy's; the usual shape is:
 
 Skip when the source policy says this revision or event id was already handled. The
 intake cursor is not the task's state: a task finishing does not mean its event was
-handled.
+handled. Dedupe by the source's stable key, never by `entryId` alone.
 
-## 4. Route
+### 4. Route
 
-### REVIEW_REQUEST
+| Intent | Admission | Execution |
+| :--- | :--- | :--- |
+| `REVIEW_REQUEST` | create a research task and delegate it | dsx `review` |
+| `FEEDBACK` | continue the matching task | the task's playbook |
+| `ISSUE_UPDATE` | `ignore` (default) or queue without starting | none until claimed |
+| `LIFECYCLE` | mark the matching task done | none |
+| `NOISE` | no task | none |
 
-Create a task in the configured board and start it:
+#### REVIEW_REQUEST
 
-```bash
-$TASK_CLI add "Review <subject> <title>" \
-  --repo "$TASK_REPO" --research --delegate \
-  --review.when never \
-  --desc "<brief>"
-```
-
-**Disable the board's post-work automatic review for this task.** A review task
-changes nothing, so an automatic review has nothing to review and only burns a
-reviewer round. herdr spells this `--review.when never`.
+Create the task with `--research --delegate`, and turn off the board's automatic
+review for it (`--review.when never`). A review task changes nothing, so an automatic
+review has nothing to review and only burns a reviewer round.
 
 The brief must include: source, subject, URL, head revision, author, event variant,
-entry id, dedupe key, the exact worktree command, and the path to the project's
-review playbook. The worktree is built from the target project, not from the board's
-own worktree.
+entry id, dedupe key, the exact worktree command, and the path to the review playbook.
+Build the evidence worktree from the target project, not from the board's own
+worktree.
 
-### FEEDBACK
+#### FEEDBACK
 
-Find the existing task using the mapping in the source policy, then:
+Find the task using the source policy's mapping, then:
 
 | Task state | Action |
 | :--- | :--- |
-| `idle` | `$TASK_CLI tell <id> "<original text>"` — the task starts and reports its own state |
-| `working` | Record the cursor only; do not interrupt |
-| `blocked` / `question`, event answers it | `tell` the original text |
-| `blocked` / `question`, event does not answer it | Report to the human |
-| `blocked` / `permission` or `auth` | Report to the human; never infer consent |
-| `done` | Do not reopen |
-| `error` | Report to the human; do not retry on your own |
+| `idle` | send the original text; the task starts and reports its own state |
+| `working` | record the cursor only; do not interrupt |
+| `blocked` / `question`, event answers it | send the original text |
+| `blocked` / `question`, event does not answer it | report to the human |
+| `blocked` / `permission` or `auth` | report to the human; never infer consent |
+| `done` | do not reopen |
+| `error` | report to the human; do not retry on your own |
 
-An approval is a continuation signal, not a merge authorization.
+Send original text, not a summary. An approval is a continuation signal, not a merge
+authorization.
 
-### ISSUE_UPDATE
+#### ISSUE_UPDATE
 
 Policy comes from the source policy: `ignore` or `queue`. `ignore` (the default) means
-inspect and ack, no task and no message. `queue` means `add` the task **without**
-`--delegate`; the human decides whether to claim it.
+inspect and ack, no task and no message. `queue` means add the task **without**
+starting it; the human decides whether to claim it.
 
-### LIFECYCLE
+#### LIFECYCLE
 
 Map the merged/closed object back to its task and mark the work finished:
 
@@ -140,28 +142,39 @@ $TASK_CLI report <id> --state done --msg "<what happened and when>"
 ```
 
 The message must say whether it was merged or closed, so a close without merge is not
-hidden. Do not approve, merge, or close anything yourself.
+hidden.
 
-### NOISE
+#### NOISE
 
-No action. Ack it with the batch.
+No task. Ack it with the batch.
 
-## 5. Ack
+### 5. Ack
 
 ```bash
 agentinbox inbox ack --agent-id "$AGENT_ID" --through "$LAST_INSPECTED_ENTRY_ID"
 ```
 
-## 6. Report
+### 6. Report
 
 Report briefly:
 
 - entries reviewed
-- review tasks created and started
+- tasks created and started
 - feedback messages sent, with task ids and source event ids
 - lifecycle changes
 - entries skipped as noise
 - unmatched or ambiguous entries
+
+## Rules
+
+- Read at most 50 unacked entries per batch. Ack only `--through` the last entry you
+  actually inspected. Never `--all`.
+- Never modify project code, commit, push, approve, merge, close, or resolve from
+  intake.
+- Delegate and change task status only where the source policy explicitly authorizes
+  it. Anything else needs a human.
+- If a mapping is uncertain, report it; do not guess.
+- Board commands are the ones the source policy names; do not invent a second backlog.
 
 ## Adding a source
 
@@ -174,5 +187,4 @@ Create `sources/<source>.md` and define:
 5. review brief and feedback templates
 6. lifecycle mapping
 
-The intake flow stays the same; only the source policy changes. The task execution
-layer is separate and must not be duplicated here.
+The intake flow stays the same; only the source policy changes.

@@ -183,20 +183,16 @@ export async function dispatchHerdrPrompt(
     "A flume activation arrived for AgentInbox.",
     ...(inboxAgent ? [`agentId=${inboxAgent}`] : []),
     `newEntryCount=${activation.newEntryCount}`,
+    `latestEntryId=${activation.latestEntryId}`,
     ...(intakeSkill ? [`intakeSkill=${intakeSkill}`] : []),
     "",
-    "Process this activation now:",
-    "- This is the configured AgentInbox intake path and a standing authorization from the deployment. Do not ask for confirmation before creating or updating board tasks from reviewed entries.",
-    "- This activation is only a wake signal; it does not contain event bodies. Read AgentInbox before acting.",
+    "This is a wake signal, not the event body.",
+    "1. Read the unacked inbox for agentId, at most 50 entries; record the last entryId you inspect.",
     ...(intakeSkill
-      ? [`- Read and follow ${intakeSkill}. It is the deployment's event intake policy.`]
-      : []),
-    "- Use the installed agentinbox skill. Read the unacked inbox in a bounded batch (at most 50 entries).",
-    "- Group related events by project/resource. Create or update herdr-projects tasks only for actionable work; ignore status-only noise.",
-    "- For any work that results, follow workflow-dsx.",
-    "- Delegate only when the intake policy explicitly allows it. Never approve, merge, close, or discard work without explicit human instruction.",
-    "- Ack only the entries you actually reviewed; never use `ack --all`.",
-    "- Reply with entries reviewed, tasks added/updated, entries acked, and anything ambiguous.",
+      ? [`2. Follow ${intakeSkill}. It is the only policy for classification, dedupe, task changes, and ack.`]
+      : ["2. Follow the configured intake policy for classification, dedupe, task changes, and ack."]),
+    "3. Ack only through the last inspected entry; never `ack --all`.",
+    "4. Reply with entries reviewed, tasks added/updated, entries acked, and anything ambiguous.",
   ].join("\n");
 
   await new Promise<void>((resolve, reject) => {
