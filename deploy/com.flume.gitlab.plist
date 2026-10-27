@@ -8,6 +8,13 @@
     <array>
         <string>/Users/mi/work/system-weaver/projects/flume/run-flume.sh</string>
     </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>FLUME_ADAPTERS</key>
+        <string>gitlab</string>
+        <key>FLUME_AGENTINBOX_INTAKE_SKILL</key>
+        <string>/Users/mi/work/system-weaver/.agents/skills/workflow-gitlab-event-intake/SKILL.md</string>
+    </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>

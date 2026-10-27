@@ -1,6 +1,7 @@
 import type { IncomingHttpHeaders } from "node:http";
 
 import type { Envelope, JsonObject } from "../envelope.js";
+import * as github from "./github.js";
 import * as gitlab from "./gitlab.js";
 
 export interface Adapter {
@@ -10,7 +11,7 @@ export interface Adapter {
   normalize(headers: IncomingHttpHeaders, body: Buffer, document: JsonObject): Envelope;
 }
 
-const ADAPTERS: readonly Adapter[] = [gitlab];
+const ADAPTERS: readonly Adapter[] = [github, gitlab];
 
 export function allAdapters(): readonly Adapter[] {
   return ADAPTERS;

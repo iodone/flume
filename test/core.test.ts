@@ -5,6 +5,7 @@ import test from "node:test";
 
 import {
   MAX_BODY_BYTES,
+  configFromEnv,
   createFlumeServer,
   isLoopbackAddress,
   type Config,
@@ -32,6 +33,33 @@ const CONFIG: Config = {
   sourceId: "src-123",
   secrets: { gitlab: SECRET },
 };
+
+test("configFromEnv enables only the requested adapters", () => {
+  const github = configFromEnv({
+    AGENTINBOX_SOURCE_ID: "src-1",
+    FLUME_ADAPTERS: "github",
+    FLUME_GITHUB_SECRET: "gh-secret",
+  });
+  assert.deepEqual(github.adapters, ["github"]);
+  assert.deepEqual(github.secrets, { github: "gh-secret" });
+
+  const both = configFromEnv({
+    AGENTINBOX_SOURCE_ID: "src-1",
+    FLUME_ADAPTERS: "github,gitlab",
+    FLUME_GITHUB_SECRET: "gh-secret",
+    FLUME_GITLAB_TOKEN: "gl-token",
+  });
+  assert.deepEqual(both.adapters, ["github", "gitlab"]);
+
+  assert.throws(
+    () =>
+      configFromEnv({
+        AGENTINBOX_SOURCE_ID: "src-1",
+        FLUME_ADAPTERS: "github",
+      }),
+    /FLUME_GITHUB_SECRET/,
+  );
+});
 
 interface Response {
   status: number;

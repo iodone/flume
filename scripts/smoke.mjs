@@ -26,7 +26,7 @@ const config = {
   bind: "127.0.0.1",
   port: 0,
   sourceId: "src_local_smoke",
-  secrets: { gitlab: "local-smoke-token" },
+  secrets: { github: "local-smoke-token" },
   wakeUrl: `http://127.0.0.1:${wakePort}/wake`,
   wakeTimeoutMs: 2_000,
 };
@@ -41,7 +41,7 @@ try {
     agentId: "herdr-local-smoke",
     newEntryCount: 2,
     latestEntryId: "entry-local-smoke",
-    summary: "2 new GitLab events",
+    summary: "2 new GitHub events",
   });
   assert.equal(valid.status, 202);
   assert.deepEqual(valid.body, { accepted: 1 });
@@ -58,7 +58,7 @@ try {
     kind: KIND,
     newEntryCount: 2,
     latestEntryId: "entry-local-smoke",
-    summary: "2 new GitLab events",
+    summary: "2 new GitHub events",
   });
   console.log(
     `[1] wake gate: POST ${received.path} X-Flume-Activation-Mode=${received.mode} body=${JSON.stringify(received.body)}`,

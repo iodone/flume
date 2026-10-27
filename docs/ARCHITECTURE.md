@@ -2,7 +2,7 @@
 
 > 定位：零状态事件转运层——**验签 → 归一成统一 envelope → 喂进 agent 收件箱 →
 > 转发唤醒**。flume = 渡槽：只负责把水从这头运到那头。
-> 当前接线（不是定义）：GitLab → AgentInbox → `herdr-projects` coordinator。
+> 当前接线（不是定义）：GitHub → AgentInbox → `herdr-projects` coordinator。
 > 用户入口是 `./run-flume.sh`；macOS 常驻只需要一个 launchd job。
 
 ## 0. 问题
@@ -16,7 +16,7 @@ flume 把这些事件翻译成一层薄桥：可靠性语义交给收件箱，�
 ## 1. 四层所有权
 
 ```text
-事件源                  Adapter（当前实现：GitLab）
+事件源                  Adapter（当前实现：GitHub、GitLab）
    │  webhook
    ▼
 flume                   验签 · 归一 · 喂入
@@ -33,7 +33,7 @@ flume                   校验四字段 · 调用唤醒器
 
 | 层 | 拥有什么 | 绝不拥有 |
 | :--- | :--- | :--- |
-| 事件源（当前 GitLab） | 产生事件、按自身机制投递重试 | — |
+| 事件源（当前 GitHub） | 产生事件、按自身机制投递重试 | — |
 | flume | 接收、验签、归一、无状态喂入、唤醒转发、进程入口 | 队列、重试、去重、持久化、唤醒决策 |
 | 收件箱（当前 AgentInbox） | durable stream、native-id 去重、订阅过滤、inbox/ack、唤醒租约 | 业务判据 |
 | agent 侧（当前 herdr） | turn 队列；`workflow-event-intake` 的 read/classify/route/ack；`workflow-dsx` 的任务编排 | 事件接入细节 |
@@ -50,9 +50,9 @@ flume                   校验四字段 · 调用唤醒器
 
 ## 3. 一条事件的生命周期
 
-1. GitLab 发出 `merge_request.opened` webhook → `POST /gitlab`。
-2. flume 验 `X-Gitlab-Token`，把 payload 归一成 envelope。
-3. flume 调用 AgentInbox source event 接口；`native_id` 用 GitLab 投递 UUID。
+1. GitHub 发出 `pull_request.opened` webhook → `POST /github`。
+2. flume 验 `X-Hub-Signature-256`，把 payload 归一成 envelope。
+3. flume 调用 AgentInbox source event 接口；`native_id` 用 `X-GitHub-Delivery`。
 4. AgentInbox 落 durable stream，按 subscription 匹配 agent，写入 inbox entry。
 5. AgentInbox 向 flume `POST /activation`，只带 `kind/newEntryCount/latestEntryId/summary`。
 6. flume 校验字段，执行 `herdr agent prompt sw-coordinator`。
@@ -97,9 +97,10 @@ intake 只决定“做不做、做哪个 task”：`REVIEW_REQUEST` 建 task 并
 由 `workflow-dsx` 的 `review` playbook 执行。策略可以显式允许 review task 派工，
 但 approve / merge / close 仍需要明确的人类指令。
 
-flume 仓库自带 `templates/workflow-event-intake/` 作为模板；部署可以复制后修改
-`sources/gitlab.md`，也可以用自己的 skill 路径覆盖。`entries` / `items` 等正文一旦
-出现在 activation payload 中，flume 直接返回 400。
+flume 仓库自带 `templates/workflow-event-intake/`，但模板不是默认 skill。部署必须
+复制到 agent workspace，修改 `sources/github.md`（或你新增的 source policy），再把
+`FLUME_AGENTINBOX_INTAKE_SKILL` 指向复制后的 `SKILL.md`。`entries` / `items` 等正文
+一旦出现在 activation payload 中，flume 直接返回 400。
 
 `sw-coordinator` 是 `herdr-projects` workspace 的 coordinator agent 名，不是
 workspace 名。超时由 `FLUME_HERDR_WAKE_TIMEOUT` 控制。
@@ -118,7 +119,7 @@ X-Flume-Activation-Mode: activation_only
   "kind": "agentinbox.activation",
   "newEntryCount": 2,
   "latestEntryId": "entry-42",
-  "summary": "2 new GitLab events"
+  "summary": "2 new GitHub events"
 }
 ```
 
@@ -139,7 +140,7 @@ activation 兼容合同（旧 HTTP 唤醒器使用；当前 herdr 路径不依�
   "waitFor": {"kind": "agentinbox.activation", "newEntryCountAtLeast": 1},
   "newEntryCount": 2,
   "latestEntryId": "entry-42",
-  "summary": "2 new GitLab events",
+  "summary": "2 new GitHub events",
   "completeWhen": {"kind": "inbox.ack", "through": "entry-42"}
 }
 ```
@@ -153,9 +154,9 @@ flume 内部唯一事件形状，adapter 负责把各家 payload 折成它：
 ```json
 {
   "native_id": "供应商投递 UUID，去重键",
-  "event": "merge_request.opened",
+  "event": "pull_request.opened",
   "occurred_at": "2026-10-23T07:00:00+08:00",
-  "source": "gitlab",
+  "source": "github",
   "subject": "group/project!123",
   "payload": {}
 }
@@ -186,7 +187,7 @@ flume 内部唯一事件形状，adapter 负责把各家 payload 折成它：
 脚本负责：
 
 1. 解析仓库根目录并准备 Node.js PATH。
-2. 从环境或 Keychain 读取 `FLUME_GITLAB_TOKEN`。
+2. 按 `FLUME_ADAPTERS` 从环境或 Keychain 读取对应 secret。
 3. 默认设置 source、绑定地址、端口和 herdr 唤醒目标。
 4. 缺少依赖或构建产物时执行 `npm install` / `npm run build`。
 5. `exec node dist/src/cli.js start`。
@@ -197,8 +198,9 @@ flume 内部唯一事件形状，adapter 负责把各家 payload 折成它：
 - 没有 daemon 且允许 autostart → spawn `agentinbox serve` 并 owned。
 - 禁止 autostart → 等待已有 daemon，超时退出。
 
-生产环境只有一个用户级 LaunchAgent `com.flume.gitlab`，它调用仓库中的
-`run-flume.sh`。AgentInbox 不单独建 launchd job，也不是第三个常驻服务。
+生产环境只有一个用户级 LaunchAgent；当前部署 label 是 `com.flume.gitlab`（启用了
+`FLUME_ADAPTERS=gitlab`），GitHub 接入时用 `com.flume.github` 并设成 `github`。它
+调用仓库中的 `run-flume.sh`。AgentInbox 不单独建 launchd job，也不是第三个常驻服务。
 
 ### 5.2 feed 接缝
 
@@ -216,7 +218,7 @@ CLI 当前没有把 `feedFn` 做成插件；嵌入 `createFlumeServer` 时可以
 
 | 角色 | 接口或落点 | 换实现要做什么 | 当前绑定 |
 | :--- | :--- | :--- | :--- |
-| 事件源 | `src/adapters/index.ts` 的 `Adapter` | 实现 `NAME` / `SECRET_ENV` / `verify` / `normalize`，加入 `ADAPTERS` | 只有 `gitlab`；路由为 `/NAME` |
+| 事件源 | `src/adapters/index.ts` 的 `Adapter` | 实现 `NAME` / `SECRET_ENV` / `verify` / `normalize`，加入 `ADAPTERS` 和 `FLUME_ADAPTERS` | `github`、`gitlab`；路由为 `/NAME` |
 | 收件箱 | `src/core.ts` 的 `FeedFunction`，默认 `src/feed.ts` | 嵌入时注入 `feedFn`；换 CLI 默认还要改入口和配置 | 默认仍走 AgentInbox |
 | 唤醒器 | `src/activation.ts` 的 `dispatchHerdrPrompt` / `dispatchActivation` | 改 `activation.ts`；外部 HTTP 唤醒器可先用 URL 模式 | 默认 exec herdr；未插件化 |
 
@@ -227,7 +229,7 @@ HTTP 兼容模式。不要把这三个接缝描述成已完成的通用插件体
 
 - fork 会把耦合钉在实现上，后续持续承担 rebase 成本。
 - AgentInbox 的远程模块扩展面已 deprecated；当前走 local_event host 的受支持用法。
-- gitlab adapter 未来可以上游化；flume 先在真实事件中验证 envelope、归一表和
+- 新 adapter 先在真实事件中验证 envelope、归一表和
   `native_id` 语义。
 
 ## 6. 扩展 adapter
@@ -256,14 +258,14 @@ adapter 只验签和折 envelope，不排队、不重试、不落盘、不做过
 ## 7. 当前部署
 
 - flume 与 AgentInbox 同机；AgentInbox 的 HTTP API 只监听 loopback/unix socket。
-- GitLab webhook 指向 flume 的内网口；当前部署为 `0.0.0.0:19420`。
+- GitHub/GitLab webhook 指向 flume 的内网口；当前部署为 `0.0.0.0:19420`。
 - herdr 在哪，flume 就部署在哪；当前唤醒目标是 `herdr-projects` 的
   `sw-coordinator`。
 - 最近一次试点：`git.n.xiaomi.com/olap/miergo` 的项目级 webhook。
 
 | 项 | 当前值 |
 | :--- | :--- |
-| launchd label | `com.flume.gitlab` |
+| launchd label | `com.flume.gitlab`（GitHub 接入用 `com.flume.github`） |
 | 入口 | `<repo>/run-flume.sh` |
 | plist | `<repo>/deploy/com.flume.gitlab.plist` |
 | 用户级软链 | `~/Library/LaunchAgents/com.flume.gitlab.plist` |
@@ -271,9 +273,10 @@ adapter 只验签和折 envelope，不排队、不重试、不落盘、不做过
 | AgentInbox | 由 flume 启动或 attach，无独立 job |
 | 唤醒 | `herdr agent prompt sw-coordinator` |
 
-GitLab webhook token 的人工维护源是 Keychain：
-`service=flume-gitlab-webhook account=flume`。`run-flume.sh` 读取后只传给 flume
-进程；token 不进入仓库、plist 或日志。
+GitHub webhook secret 的人工维护源是 Keychain：
+`service=flume-github-webhook account=flume`。GitLab adapter 使用
+`service=flume-gitlab-webhook`。`run-flume.sh` 读取后只传给 flume 进程；token 不
+进入仓库、plist 或日志。
 
 AgentInbox 的 host/source/subscription 属于一次性控制面配置，由部署者维护；
 日常运行和文档中的用户入口都不需要操作它。
@@ -303,5 +306,5 @@ AgentInbox 的 host/source/subscription 属于一次性控制面配置，由部�
 - 不做事件存储或回放——由 AgentInbox durable stream 负责。
 - 不做业务过滤——由 AgentInbox subscription 负责。
 - 不做唤醒策略（退避、租约、攒批）——由 AgentInbox 通知策略和 herdr turn 调度负责。
-- 不做定时全量巡检——GitLab 变更由 webhook → AgentInbox activation 驱动。
+- 不做定时全量巡检——GitHub/GitLab 变更由 webhook → AgentInbox activation 驱动。
 - 不 import AgentInbox 内部模块、不 fork、不融仓库。

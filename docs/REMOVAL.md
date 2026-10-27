@@ -1,5 +1,8 @@
 # 撤除当前接线
 
+本文是当前 `miergo` / GitLab 部署的撤除示例。GitHub 部署只需把 webhook 页面、
+`/gitlab` 路径和 `flume-gitlab-webhook` 换成对应的 GitHub 项。
+
 本文撤除当前试点：`olap/miergo` → flume → AgentInbox → herdr-projects coordinator。
 先停止新事件进入，再清理接收端和本地凭据。
 

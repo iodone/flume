@@ -189,7 +189,7 @@ export async function dispatchHerdrPrompt(
     "- This is the configured AgentInbox intake path and a standing authorization from the deployment. Do not ask for confirmation before creating or updating board tasks from reviewed entries.",
     "- This activation is only a wake signal; it does not contain event bodies. Read AgentInbox before acting.",
     ...(intakeSkill
-      ? [`- Read and follow ${intakeSkill}. It is the deployment's event intake policy. If it is missing, use the fallback rules below.`]
+      ? [`- Read and follow ${intakeSkill}. It is the deployment's event intake policy.`]
       : []),
     "- Use the installed agentinbox skill. Read the unacked inbox in a bounded batch (at most 50 entries).",
     "- Group related events by project/resource. Create or update herdr-projects tasks only for actionable work; ignore status-only noise.",

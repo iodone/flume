@@ -27,7 +27,7 @@ test("flume start exits 2 when required configuration is missing", async () => {
 
   assert.equal(code, 2);
   assert.match(stderr, /AGENTINBOX_SOURCE_ID/);
-  assert.match(stderr, /FLUME_GITLAB_TOKEN/);
+  assert.match(stderr, /FLUME_GITHUB_SECRET/);
   assert.doesNotMatch(stderr, /s3cret-token/);
 });
 
@@ -42,7 +42,8 @@ test(
         PATH: process.env.PATH,
         HOME: home,
         AGENTINBOX_SOURCE_ID: "src-fresh-home",
-        FLUME_GITLAB_TOKEN: "local-smoke-token",
+        FLUME_ADAPTERS: "github",
+        FLUME_GITHUB_SECRET: "local-smoke-token",
         FLUME_BIND: "127.0.0.1",
         FLUME_PORT: "0",
       },

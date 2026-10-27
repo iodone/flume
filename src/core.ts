@@ -10,7 +10,7 @@ import {
   dispatchHerdrPrompt,
   WakeGateError,
 } from "./activation.js";
-import { allAdapters, getAdapter } from "./adapters/index.js";
+import { getAdapter } from "./adapters/index.js";
 import {
   EnvelopeError,
   isJsonObject,
@@ -32,6 +32,7 @@ export interface Config {
   bind: string;
   port: number;
   sourceId: string;
+  adapters?: readonly string[];
   secrets: Record<string, string>;
   wakeUrl?: string;
   wakeAgent?: string;
@@ -47,9 +48,20 @@ export type FeedFunction = (
 ) => Promise<void> | void;
 
 export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
+  const requested = (env.FLUME_ADAPTERS ?? "github")
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean);
+  const selected = requested.map((name) => {
+    const adapter = getAdapter(name);
+    if (!adapter) {
+      throw new ConfigError(`unknown adapter: ${name}`);
+    }
+    return adapter;
+  });
   const required = [
     "AGENTINBOX_SOURCE_ID",
-    ...allAdapters().map((adapter) => adapter.SECRET_ENV),
+    ...selected.map((adapter) => adapter.SECRET_ENV),
   ];
   const missing = required.filter((name) => !env[name]);
   if (missing.length > 0) {
@@ -68,17 +80,26 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
     throw new ConfigError("FLUME_HERDR_WAKE_TIMEOUT must be positive");
   }
 
+  const wakeAgent = env.FLUME_HERDR_WAKE_AGENT?.trim() || undefined;
+  const intakeSkill = env.FLUME_AGENTINBOX_INTAKE_SKILL?.trim() || undefined;
+  if (wakeAgent && !intakeSkill) {
+    throw new ConfigError(
+      "FLUME_AGENTINBOX_INTAKE_SKILL is required when FLUME_HERDR_WAKE_AGENT is set",
+    );
+  }
+
   return {
     bind: env.FLUME_BIND || "127.0.0.1",
     port,
     sourceId: env.AGENTINBOX_SOURCE_ID!,
+    adapters: selected.map((adapter) => adapter.NAME),
     secrets: Object.fromEntries(
-      allAdapters().map((adapter) => [adapter.NAME, env[adapter.SECRET_ENV]!]),
+      selected.map((adapter) => [adapter.NAME, env[adapter.SECRET_ENV]!]),
     ),
     wakeUrl: env.FLUME_HERDR_WAKE_URL?.trim() || undefined,
-    wakeAgent: env.FLUME_HERDR_WAKE_AGENT?.trim() || undefined,
+    wakeAgent,
     inboxAgent: env.FLUME_AGENTINBOX_AGENT_ID?.trim() || undefined,
-    intakeSkill: env.FLUME_AGENTINBOX_INTAKE_SKILL?.trim() || undefined,
+    intakeSkill,
     herdrBin: env.HERDR_BIN_PATH?.trim() || "herdr",
     wakeTimeoutMs: timeoutSeconds * 1_000,
   };
@@ -140,6 +161,16 @@ async function handleRequest(
       response,
       404,
       { error: `unknown adapter: ${pathname || "/"}` },
+      true,
+    );
+    return;
+  }
+  if (config.adapters && !config.adapters.includes(adapter.NAME)) {
+    request.resume();
+    sendJson(
+      response,
+      404,
+      { error: `adapter not enabled: ${adapter.NAME}` },
       true,
     );
     return;
