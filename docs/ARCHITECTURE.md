@@ -1,52 +1,61 @@
 # flume 架构与设计
 
-> 状态：设计定稿（2026-10-23）。
-> flume = 渡槽：只负责把水从这头运到那头。
-> 技术形态：Node/TS，与 AgentInbox 同生态；开发态入口 `flume start`，生产态由
-> macOS launchd 分别管理 AgentInbox 与 flume。
+> 定位：零状态事件转运层——**验签 → 归一成统一 envelope → 喂进 agent 收件箱 →
+> 转发唤醒**。flume = 渡槽：只负责把水从这头运到那头。
+> 当前接线（不是定义）：内网 GitLab 事件源 → AgentInbox 收件箱 → herdr 唤醒门。
+> 技术形态：Node/TS；开发态入口 `flume start`，当前生产态由 macOS launchd 管理。
+> 事件源、收件箱、唤醒器都是可替换角色，替换边界见第 5.4 节。
 
 ---
 
 ## 0. 问题
 
-herdr / codex / claude 等本地 agent loop 需要感知外部系统（内网 GitLab 的 MR、CI、评论）的事件，但不能靠 agent 自己轮询：轮询住在 agent 侧，每接一个系统就多一份 connector gravity（SDK、webhook、重试、回调路由全被吸进 runtime）。
+本地 agent loop 需要感知外部系统的事件，但不能靠 agent 自己轮询：轮询住在 agent
+侧，每接一个系统就多一份 connector gravity（SDK、webhook、重试、回调路由全被吸
+进 runtime）。今天的例子是 GitLab MR/CI/评论和 herdr，但问题不只属于这两个实现。
 
 解法：**事件翻译成一层薄桥，可靠性语义全部留给收件箱，唤醒决策留在 agent 侧。**
 
 ## 1. 四层所有权
 
 ```
-外部系统        GitLab（内网）· 未来更多源
-   │  webhook POST
+事件源接口       Adapter（当前实现：GitLab）
+   │  事件
    ▼
-flume           验签 · 归一 · 喂入 · 转发      ← 零状态翻译层 + 单一入口
-   │  POST /sources/{id}/events
+flume           验签 · 归一 · 喂入 · 转发      ← 零状态转运层 + 单一入口
+   │  feedFn(envelope, { sourceId })
    ▼
-AgentInbox      stream · 订阅 · inbox · ack · activation   ← 可靠性语义
-   │  webhook（activation_only）→ flume /activation
+收件箱接口       FeedFunction（当前实现：AgentInbox）
+   │  写箱后的通知 → flume /activation
    ▼
 flume          校验 · 只转发 activation 四字段             ← 不读正文
-   │  POST activation_only
+   │  HTTP 唤醒
    ▼
-herdr           唤醒门 · 等待表 · 授权门 · agent loop        ← 决策与执行
+唤醒接收器      当前实现：herdr 唤醒门 · agent loop          ← 决策与执行
 ```
 
 | 层 | 拥有什么 | 绝不拥有 |
 | :--- | :--- | :--- |
-| 外部系统 | 事件源、投递重试 | — |
-| flume | webhook 入口、验签、归一化、activation_only 无状态转发、进程入口 | 队列、重试、去重、持久化、唤醒决策 |
-| AgentInbox | durable stream、native-id 去重、订阅过滤、inbox/ack、唤醒租约 | 业务判据 |
-| herdr | wake_condition、授权、开 turn、任务语义 | 事件接入细节 |
+| 事件源（当前 GitLab） | 产生事件、按自身机制投递重试 | — |
+| flume | 接收、验签、归一化、无状态喂入、唤醒转发、进程入口 | 队列、重试、去重、持久化、唤醒决策 |
+| 收件箱（当前 AgentInbox） | durable stream、native-id 去重、订阅过滤、inbox/ack、唤醒租约 | 业务判据 |
+| 唤醒后的 agent 侧（当前 herdr） | wake_condition、授权、开 turn、任务语义 | 事件接入细节 |
 
 ## 2. 三条红线
 
-1. **flume 零状态**：不在内存外存任何东西。重试、去重、持久化是 AgentInbox 的活。flume 挂了 = 事件丢失窗口，这是刻意的取舍——换来的是永不长出第二份真相。
-2. **唤醒 ≠ 授权**：activation target 用 activation_only 模式，只叫醒不推正文；正文必须回 inbox read。开不开 turn 由 herdr 唤醒门按等待表判据决定。
-3. **协议抄拓扑不抄**：接 AgentInbox 用它的 host/source/subscription 模型，不照搬它的实现；等待语义（等什么条件）留在 herdr 等待表，不搬进 subscription filter。
+1. **flume 零状态**：不在内存外存任何东西。重试、去重、持久化是收件箱的活，当前由
+   AgentInbox 承担。flume 挂了 = 事件丢失窗口，这是刻意的取舍——换来的是永不长出
+   第二份真相。
+2. **唤醒 ≠ 授权**：当前 activation 只转发四个唤醒字段，只叫醒不推正文；正文必须
+   回收件箱读取。开不开 turn 由唤醒后的 agent 侧决定，当前是 herdr 唤醒门按等待表
+   判据处理。
+3. **协议抄拓扑不抄**：接入当前 AgentInbox 时用它的 host/source/subscription 模型，
+   不照搬它的实现；等待语义（等什么条件）留在当前 herdr 等待表，不搬进订阅过滤器。
 
-## 3. 事件生命周期
+## 3. 事件生命周期（当前接线）
 
-一条 MR 事件的一生：
+下面用当前 GitLab → AgentInbox → herdr 接线说明一条 MR 事件的一生。换成别的事件
+源、收件箱或唤醒器时，可靠性边界不变，但路由、payload 和通知机制会随实现改变。
 
 1. GitLab 发出 `merge_request.opened` webhook → POST flume
 2. flume 验 `X-Gitlab-Token`，解析 payload，归一成 envelope
@@ -60,7 +69,7 @@ herdr           唤醒门 · 等待表 · 授权门 · agent loop        ← 决
 
 判据分叉在第 7 步。前六步纯搬运，不许长出判断。**read / 进件 / ack 三条动作全归 coordinator（判断位）**——worker 只读 brief，不知道 agentinbox 存在。事件是 herdr-projects 的一种 TRIGGER（监控告警类），走既有进件口，不另开通道。
 
-### 2.1 唤醒链路真对接
+### 3.1 当前唤醒链路
 
 `POST /sources/{id}/events` 只返回 append 结果，不返回 inbox entry id；
 `newEntryCount` 和 `latestEntryId` 只有订阅匹配、写入 inbox 之后才存在。flume
@@ -139,16 +148,22 @@ flume 内部唯一事件形状，adapter 负责把各家 payload 折成它：
 
 | 字段 | 要求 |
 | :--- | :--- |
-| native_id | 必须稳定：同一投递重试 → 同一 id → AgentInbox 自动 dedupe |
+| native_id | 必须稳定：同一投递重试 → 同一 id → 当前由 AgentInbox 自动 dedupe |
 | event | <对象>.<动作>，订阅过滤按它匹配 |
 | occurred_at | ISO8601，取事件自身时间戳 |
 | source | 系统名（= adapter 的 NAME） |
-| subject | 人可读对象定位，等待表判据用它对齐 |
+| subject | 人可读对象定位，当前等待表判据用它对齐 |
 | payload | 供应商原始 payload，不裁剪 |
 
-## 4.5 知识接线：herdr 怎么知道要用 AgentInbox
+envelope 是 flume 的通用转运契约，但它的字段语义不是凭空抽象出来的：`native_id`
+服务于收件箱去重，`event` 服务于订阅过滤，`subject` 服务于当前 herdr 等待表。
+换实现时要么让新实现消费同一形状，要么同步修改 `src/envelope.ts` 与两端适配。
 
-**答案：不注入。知识常驻，唤醒只传指针。**
+## 4.5 当前接线：herdr 怎么知道要用 AgentInbox
+
+本节描述当前 herdr + AgentInbox 接线的协调方式，不是转运层的定义。
+
+**当前答案：不注入。知识常驻，唤醒只传指针。**
 
 | 机制 | 内容 | 时机 |
 | :--- | :--- | :--- |
@@ -177,9 +192,11 @@ flume 内部唯一事件形状，adapter 负责把各家 payload 折成它：
 
 一句话：**手册给操作者，动作给工人。** worker 何时值得拿手册 = 信任梯度允许它自主改拓扑那天。
 
-## 5. 技术形态
+## 5. 当前实现与技术形态
 
 ### 5.1 Node/TS 同生态
+
+这是当前实现的技术选择，不是 flume 的定义：
 
 | 理由 | 说明 |
 | :--- | :--- |
@@ -187,9 +204,11 @@ flume 内部唯一事件形状，adapter 负责把各家 payload 折成它：
 | 与上游同生态 | 终局是把 gitlab adapter 贡进 AgentInbox（其 adapter 层就是 TS）。TS 写的翻译层是可搬运资产 |
 | 一条命令安装 | npm dependency 把 AgentInbox 一起带到，用户只面对一个入口 |
 
-### 5.2 单一入口：flume start（ensure ≠ own）
+### 5.2 当前单一入口：flume start（ensure ≠ own）
 
-AgentInbox 的 npm 包只有 bin（CLI/daemon 入口），没有可 import 的库面——它是进程不是库。所以「同源」= 同生态、同安装面、最终上游化；**不是** import 它的内部模块或融成一个仓库。
+当前 AgentInbox 的 npm 包只有 bin（CLI/daemon 入口），没有可 import 的库面——
+它是进程不是库。所以当前接线里的「同源」= 同生态、同安装面、最终上游化；
+**不是** import 它的内部模块或融成一个仓库。
 
 开发态的 `flume start` 语义：
 
@@ -211,18 +230,36 @@ AgentInbox 尚未就绪时 flume 最多等 15 秒，超时由 `KeepAlive` 再试
 AgentInbox 崩了由自己的 `KeepAlive` 拉起，flume 崩了也只重启 flume，不存在
 “谁是谁的子进程”生命周期耦合。
 
-### 5.3 feed：唯一接缝
+### 5.3 feed：收件箱接缝
 
-唯一接缝在 feed 一个模块，两种取向：
+`src/core.ts` 暴露 `FeedFunction` 类型，函数形状是
+`feedFn(envelope, { sourceId })`。`src/feed.ts` 是当前 AgentInbox 默认实现，
+内部先走 HTTP，再以 CLI 兜底：
 
 | 取向 | 通道 | 取舍 |
 | :--- | :--- | :--- |
 | HTTP（默认） | POST /sources/{id}/events，unix socket | 快一个数量级；resource-oriented HTTP 面是声明 stable 的 |
 | CLI（后备） | spawn agentinbox source event | 最朴素，容错兜底 |
 
-换收件箱、换通道，只动这一个模块。adapter、envelope、core 一行不改。
+接缝并非完整的收件箱插件：`src/cli.ts` 调 `createFlumeServer(config)` 时没有传入
+自定义 `feedFn`，所以安装后的 `flume start` 固定走 `src/feed.ts`。在嵌入
+`createFlumeServer` 的代码里可以注入别的 feed；要让 CLI 换收件箱，还要改默认接线
+和配置语义。只要新收件箱消费同一 envelope，adapter 与 envelope 无需跟着改。
 
-### 5.4 不 fork、不上插件
+### 5.4 三个替换点
+
+| 角色 | 接口或落点 | 换实现要做什么 | 当前仍与实现绑定的部分 |
+| :--- | :--- | :--- | :--- |
+| 事件源 | `src/adapters/index.ts` 的 `Adapter` | 新增一个实现 `NAME` / `SECRET_ENV` / `verify` / `normalize → Envelope` 的模块，并加入 `ADAPTERS` | 注册表目前只有 `gitlab`；路由由 `NAME` 固定为 `/NAME` |
+| 收件箱 | `src/core.ts` 的 `FeedFunction`；默认实现 `src/feed.ts` | 嵌入时向 `createFlumeServer` 注入 `feedFn`；换 CLI 默认实现则还要改 `src/cli.ts` 与 `AGENTINBOX_SOURCE_ID` 等配置 | 默认 feed、`sourceId` 配置、autostart 与 launchd 脚本仍围绕 AgentInbox |
+| 唤醒器 | `src/activation.ts` 的 `Activation` / `dispatchActivation`，由 `src/core.ts` 的 `/activation` 调用 | 接收方接受相同四字段与请求头时可只换 `FLUME_HERDR_WAKE_URL`；换协议则改 activation 转发与配置名 | 没有独立唤醒接口；`kind`、四字段、`X-Flume-Activation-Mode`、`FLUME_HERDR_*` 和等待表合同仍是当前协议 |
+
+因此可以准确地说：**事件源是 Adapter 接口；收件箱是可在 core 注入的
+`FeedFunction`，但 CLI 尚未插件化；唤醒是固定 HTTP 转发，只有目标 URL 可配置。**
+envelope 字段、配置项命名、日志文案、测试与安装脚本仍保留当前实现的痕迹。不要把
+这三个接缝描述成已经完成的通用插件体系。
+
+### 5.5 当前接线的取舍：不 fork、不上插件
 
 - fork = 把耦合钉在实现上，此后永久 rebase 税。实测 AgentInbox 的存储边界在大版本里推倒重来过，fork 的 diff 跟不动
 - 它的远程模块扩展面已 deprecated，官方扩展口就是 local_event host——flume 走的正是它设计的用法
@@ -244,7 +281,7 @@ core 不动。adapter 只做两件事：验签、折 envelope。不许在 adapte
 
 轮询不消失，但被隔离：单独 poller 进程拉取 → 折 envelope → 喂 flume 统一入口。agent 侧永远不碰轮询。
 
-### 6.3 部署
+### 6.3 当前部署
 
 - flume 与 AgentInbox daemon 同机（其 HTTP API 只监听 loopback/unix socket）
 - GitLab webhook 指向 flume 的内网口；token 不进仓库、plist 或命令行
@@ -291,9 +328,9 @@ source 共享、subscription 私有——别一个 PR 一个 source。
 - GitLab hook URL、AgentInbox source、subscription、target 和 lease 均不因运行形态
   切换而改变。
 
-## 7. 落地路径
+## 7. 当前落地路径
 
-### 阶段一：核心通道（已接真实事件）
+### 阶段一：当前核心通道（已接真实事件）
 
 **状态：已接真实事件（2026-10-26）。** `git.n.xiaomi.com/olap/miergo`
 的项目级 webhook 已直接投递到内网 flume。真实 MR、评论、Push 与 Pipeline
@@ -338,7 +375,7 @@ projects/flume/
     core.ts             # HTTP 门面：verify -> normalize -> feed / activation
     activation.ts       # activation_only 校验、转发、等待表合同
     envelope.ts         # Envelope 形状与校验
-    feed.ts             # 唯一接缝：HTTP 默认 / CLI 后备
+    feed.ts             # 默认收件箱实现：HTTP 优先 / CLI 后备
     adapters/
       index.ts          # 注册表
       gitlab.ts
@@ -364,7 +401,7 @@ SECRET_ENV 自动进必填名单，缺了直接 exit 2，不带病启动。
 | 400 | 非 JSON / envelope 不合法 |
 | 401 | token 错 |
 | 413 | body 超 8MB |
-| 502 | AgentInbox 没收下，或唤醒门拒绝 activation（不重试，交上游投递重试） |
+| 502 | 当前收件箱 AgentInbox 没收下，或唤醒门拒绝 activation（不重试，交上游投递重试） |
 | 503 | activation 合法但未配置 `FLUME_HERDR_WAKE_URL` |
 
 ### 测试类别
@@ -375,6 +412,8 @@ SECRET_ENV 自动进必填名单，缺了直接 exit 2，不带病启动。
 4. activation：真实本地 HTTP 唤醒门调用、四字段 payload、等待表判据、正文拒收
 
 ### 配置
+
+下表是当前接线的变量名；换收件箱或唤醒协议时不能假设这些名字仍然适用。
 
 | 变量 | 默认 | 说明 |
 | :--- | :--- | :--- |
@@ -391,8 +430,8 @@ token 不进仓库、plist、argv、继承环境、日志或响应体。
 
 ## 9. 明确不做的事
 
-- 不做第二套投递（队列/重试/死信）——AgentInbox 已有
-- 不做事件存储/回放——durable stream 已有
-- 不做业务过滤——subscription 已有
-- 不做唤醒策略（退避/租约/攒批）——AgentInbox 通知策略 + herdr 授权门已有
-- 不 import AgentInbox 内部模块、不 fork、不融仓库
+- 不做第二套投递（队列/重试/死信）——当前交给 AgentInbox；换收件箱也仍由该层负责
+- 不做事件存储/回放——当前由 AgentInbox durable stream 负责
+- 不做业务过滤——当前由 AgentInbox subscription 负责
+- 不做唤醒策略（退避/租约/攒批）——当前由 AgentInbox 通知策略 + herdr 授权门负责
+- 当前不 import AgentInbox 内部模块、不 fork、不融仓库
