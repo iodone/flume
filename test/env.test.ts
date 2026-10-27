@@ -61,7 +61,7 @@ test("rejects an env file readable by group or others", async () => {
   }
 });
 
-test("explicit environment takes precedence over the env file", async () => {
+test("env file takes precedence over explicit environment", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "flume-env-"));
   const envPath = path.join(directory, "flume.env");
 
@@ -75,8 +75,8 @@ test("explicit environment takes precedence over the env file", async () => {
       FLUME_BIND: "shell-host",
     });
 
-    assert.equal(loaded.FLUME_PORT, "2000");
-    assert.equal(loaded.FLUME_BIND, "shell-host");
+    assert.equal(loaded.FLUME_PORT, "1000");
+    assert.equal(loaded.FLUME_BIND, "file-host");
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

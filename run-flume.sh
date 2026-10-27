@@ -9,62 +9,20 @@ if ! command -v node >/dev/null 2>&1; then
   exit 2
 fi
 
-load_env_file() {
-  local file="$1"
-  local mode
-  mode="$(stat -f '%Lp' "$file" 2>/dev/null || stat -c '%a' "$file" 2>/dev/null || true)"
+ENV_FILE="$ROOT/.env"
+if [[ -f "$ENV_FILE" ]]; then
+  mode="$(stat -f '%Lp' "$ENV_FILE" 2>/dev/null || stat -c '%a' "$ENV_FILE" 2>/dev/null || true)"
   mode="${mode##0}"
   if [[ "$mode" != "600" ]]; then
-    echo "flume: $file must have permissions 600" >&2
+    echo "flume: $ENV_FILE must have permissions 600" >&2
     exit 2
   fi
-
-  local line key value line_number=0
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    line_number=$((line_number + 1))
-    line="${line#"${line%%[![:space:]]*}"}"
-    line="${line%"${line##*[![:space:]]}"}"
-    [[ -z "$line" || "$line" == \#* ]] && continue
-
-    if [[ "$line" == export[[:space:]]* ]]; then
-      line="${line#export}"
-      line="${line#"${line%%[![:space:]]*}"}"
-    fi
-    if [[ "$line" != *=* ]]; then
-      echo "flume: $file has an invalid assignment on line $line_number" >&2
-      exit 2
-    fi
-
-    key="${line%%=*}"
-    value="${line#*=}"
-    key="${key%"${key##*[![:space:]]}"}"
-    value="${value#"${value%%[![:space:]]*}"}"
-    value="${value%"${value##*[![:space:]]}"}"
-    if [[ ! "$key" =~ '^[A-Za-z_][A-Za-z0-9_]*$' ]]; then
-      echo "flume: $file has an invalid key on line $line_number" >&2
-      exit 2
-    fi
-    if [[ ${#value} -ge 2 ]]; then
-      if [[ "${value[1]}" == '"' && "${value[-1]}" == '"' ]] || [[ "${value[1]}" == "'" && "${value[-1]}" == "'" ]]; then
-        value="${value[2,-2]}"
-      fi
-    fi
-    if (( ! ${+parameters[$key]} )); then
-      export "$key=$value"
-    fi
-  done < "$file"
-}
-
-ENV_FILE="${FLUME_ENV_FILE:-$ROOT/.env.local}"
-if [[ -n "${FLUME_ENV_FILE:-}" && ! -f "$ENV_FILE" ]]; then
-  echo "flume: FLUME_ENV_FILE cannot be read: $ENV_FILE" >&2
-  exit 2
-fi
-if [[ -f "$ENV_FILE" ]]; then
-  load_env_file "$ENV_FILE"
+  set -a
+  source "$ENV_FILE"
+  set +a
 fi
 
-# Deployment defaults. Explicit environment variables and .env.local take precedence.
+# Deployment defaults. Values from .env take precedence.
 export FLUME_ADAPTERS="${FLUME_ADAPTERS:-github}"
 export AGENTINBOX_SOURCE_ID="${AGENTINBOX_SOURCE_ID:-}"
 export FLUME_BIND="${FLUME_BIND:-0.0.0.0}"

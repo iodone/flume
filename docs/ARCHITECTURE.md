@@ -194,13 +194,13 @@ flume 内部唯一事件形状，adapter 负责把各家 payload 折成它：
 脚本负责：
 
 1. 解析仓库根目录并准备 Node.js PATH。
-2. 加载 `.env.local`（或 `FLUME_ENV_FILE` 指向的文件）。
+2. 加载 `.env`。
 3. 默认设置 source、绑定地址、端口和唤醒目标。
 4. 按 `FLUME_ADAPTERS` 从环境或 Keychain 读取对应 secret。
 5. 缺少依赖或构建产物时执行 `npm install` / `npm run build`。
 6. `exec node dist/src/cli.js start`。
 
-配置优先级：显式环境变量 > `.env.local` > 脚本默认值。环境文件权限必须为 `600`。
+同名变量由 `.env` 覆盖；脚本默认值在变量为空时兜底。环境文件权限必须为 `600`。
 
 启动时 flume 探测 `~/.agentinbox/agentinbox.sock`：
 

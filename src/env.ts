@@ -42,7 +42,7 @@ export async function environmentWithOptionalFile(
     throw new ConfigError(`${ENV_FILE_VAR} cannot be read: ${envPath}`);
   }
 
-  return { ...parseEnvFile(text), ...env };
+  return { ...env, ...parseEnvFile(text) };
 }
 
 export function parseEnvFile(text: string): Record<string, string> {

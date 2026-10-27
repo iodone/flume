@@ -34,7 +34,7 @@ flume 把接入、可靠性和业务判断拆开：
 1. 写入 GitHub webhook secret。
 2. 配置 GitHub webhook。
 3. 复制并配置 intake skill。
-4. 复制 `.env.example` 为 `.env.local`，填入本机配置。
+4. 复制 `.env.example` 为 `.env`，填入本机配置。
 
 然后启动：
 
@@ -125,15 +125,15 @@ end note
 
 ## 配置
 
-默认值在 [`run-flume.sh`](run-flume.sh)。本机配置写入仓库根目录 `.env.local`，脚本启动时自动加载；也可以在启动前设置同名环境变量。优先级：显式环境变量 > `.env.local` > 脚本默认值。
+默认值在 [`run-flume.sh`](run-flume.sh)。本机配置写入仓库根目录 `.env`，脚本启动时用 `source` 加载；同名 shell 变量会被 `.env` 覆盖。
 
 ```bash
-cp .env.example .env.local
-chmod 600 .env.local
-$EDITOR .env.local
+cp .env.example .env
+chmod 600 .env
+$EDITOR .env
 ```
 
-`.env.local` 已被 Git 忽略，权限必须为 `600`。模板 `.env.example` 只列变量；密钥优先放 Keychain。`FLUME_ENV_FILE` 可以指向其他文件，默认使用 `$ROOT/.env.local`。
+`.env` 已被 Git 忽略，权限必须为 `600`。模板 `.env.example` 只列变量；密钥优先放 Keychain。
 
 | 变量 | 默认值 | 用途 |
 | :--- | :--- | :--- |
@@ -255,7 +255,7 @@ GitHub 的参考映射（按你的配置修改 `sources/github.md`）：
 
 把仓库里的 plist 链接到 `~/Library/LaunchAgents` 即可，launchd 会从该目录加载用户级 job。
 
-仓库里的 [`deploy/com.flume.plist`](deploy/com.flume.plist) 就是 flume 进程的 launchd 入口，label 固定为 `com.flume`。事件源不影响 job 名称；本机配置写入 `.env.local`，plist 的 `EnvironmentVariables` 作为显式覆盖。
+仓库里的 [`deploy/com.flume.plist`](deploy/com.flume.plist) 就是 flume 进程的 launchd 入口，label 固定为 `com.flume`。事件源不影响 job 名称；本机配置写入 `.env`。
 
 加载：
 

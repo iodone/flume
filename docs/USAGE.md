@@ -19,7 +19,7 @@ flume 是零状态事件转运层：**验签 → 归一成统一 envelope → �
 1. 按第 3 节写入 webhook secret。
 2. 按第 3 节配置事件源 webhook。
 3. 按第 3 节复制并配置 agent intake skill。
-4. 按第 3 节生成并填写 `.env.local`。
+4. 按第 3 节生成并填写 `.env`。
 5. 启动：
 
 ```bash
@@ -55,15 +55,15 @@ flume 是零状态事件转运层：**验签 → 归一成统一 envelope → �
 
 ## 3. 配置
 
-默认值在 [`run-flume.sh`](../run-flume.sh)。本机配置写入仓库根目录 `.env.local`，启动时自动加载；也可以在启动前设置同名环境变量。优先级：显式环境变量 > `.env.local` > 脚本默认值；前台启动、launchd 和 CI 使用同一个入口。
+默认值在 [`run-flume.sh`](../run-flume.sh)。本机配置写入仓库根目录 `.env`，启动时用 `source` 加载；同名 shell 变量会被 `.env` 覆盖。前台启动、launchd 和 CI 使用同一个入口。
 
 ```bash
-cp .env.example .env.local
-chmod 600 .env.local
-$EDITOR .env.local
+cp .env.example .env
+chmod 600 .env
+$EDITOR .env
 ```
 
-`.env.local` 已被 Git 忽略，权限必须为 `600`。模板 `.env.example` 只列变量；密钥优先放 Keychain。`FLUME_ENV_FILE` 可以指向其他文件，默认使用仓库根目录的 `.env.local`。
+`.env` 已被 Git 忽略，权限必须为 `600`。模板 `.env.example` 只列变量；密钥优先放 Keychain。
 
 | 变量 | 默认值 | 用途 |
 | :--- | :--- | :--- |
@@ -233,11 +233,11 @@ npm run smoke
 
 把仓库里的 plist 链接到 `~/Library/LaunchAgents` 即可，launchd 会从该目录加载用户级 job。
 
-仓库里的 `deploy/com.flume.plist` 就是 flume 进程的 launchd 入口，label 固定为 `com.flume`。事件源不影响 job 名称；本机配置写入 `.env.local`，plist 的 `EnvironmentVariables` 作为显式覆盖：
+仓库里的 `deploy/com.flume.plist` 就是 flume 进程的 launchd 入口，label 固定为 `com.flume`。事件源不影响 job 名称；本机配置写入 `.env`：
 
 ```bash
 # ProgramArguments=/absolute/path/to/flume/run-flume.sh
-# 适配器、agent、intake skill 等变量写入 .env.local
+# 适配器、agent、intake skill 等变量写入 .env
 mkdir -p logs
 ln -sf "$PWD/deploy/com.flume.plist" \
   "$HOME/Library/LaunchAgents/com.flume.plist"
