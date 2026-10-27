@@ -7,8 +7,8 @@
 
 ## 0. 问题
 
-本地 agent loop 需要感知外部系统的事件，但不能靠 agent 自己轮询。轮询住在 agent
-侧，每接一个系统就会把 SDK、webhook、重试、去重和回调路由吸进 runtime，形成
+本地 agent loop 需要感知外部系统的事件。把轮询放在 agent 侧，每接一个系统就会
+把 SDK、webhook、重试、去重和回调路由吸进 runtime，形成
 connector gravity。
 
 flume 把这些事件翻译成一层薄桥：可靠性语义交给 AgentInbox，业务判断留在 agent
@@ -28,7 +28,7 @@ flume 把这些事件翻译成一层薄桥：可靠性语义交给 AgentInbox，
 | 唤醒器 | 可替换 | 把 activation 变成一次 agent turn；当前示例是 herdr |
 | agent 侧 | 部署决定 | 读 inbox、决定是否建 task、按自己的 playbook 执行 |
 
-flume 不定义 GitHub，也不定义 herdr。adapter 和唤醒器都可以替换，核心处理链路不变。
+GitHub 和 herdr 是当前示例；adapter 和唤醒器都按部署替换，核心处理链路不变。
 
 ## 2. 分层与所有权
 
@@ -48,21 +48,21 @@ flume                   校验四字段 · 调用唤醒器
 agent 侧                coordinator 读 inbox · intake · task orchestration
 ```
 
-| 层 | 拥有什么 | 绝不拥有 |
+| 层 | 负责 | 边界由谁承担 |
 | :--- | :--- | :--- |
 | 事件源（示例 GitHub） | 产生事件、按自身机制投递重试 | — |
-| flume | 接收、验签、归一、无状态喂入、唤醒转发、进程入口 | 队列、重试、去重、持久化、唤醒决策 |
-| AgentInbox | durable stream、native-id 去重、订阅过滤、inbox/ack、唤醒租约 | 业务判据 |
-| agent 侧 | turn 队列；`workflow-event-intake` 的 read/classify/route/ack；任务执行层的编排 | 事件接入细节 |
+| flume | 接收、验签、归一、无状态喂入、唤醒转发、进程入口 | 队列、重试、去重、持久化、唤醒决策由 AgentInbox 承担 |
+| AgentInbox | durable stream、native-id 去重、订阅过滤、inbox/ack、唤醒租约 | 业务判据由 agent 侧承担 |
+| agent 侧 | turn 队列；`workflow-event-intake` 的 read/classify/route/ack；任务执行层的编排 | 事件接入细节由 flume / AgentInbox 承担 |
 
 ## 3. 三条红线
 
-1. **flume 零状态**：不在内存外存任何东西。重试、去重和持久化由 AgentInbox 承担。
+1. **flume 零状态**：状态写入 AgentInbox，重试、去重和持久化也由它承担。
    flume 挂掉会留下事件丢失窗口，这是为“永不长出第二份真相”付出的代价。
-2. **唤醒 ≠ 授权**：activation 只有四个唤醒字段，不携带正文。正文必须回
-   AgentInbox `inbox read`；是否处理、是否建 task 由 agent 侧按 inbox 内容判断。
-3. **抄拓扑不抄实现**：使用 AgentInbox 的 host/source/subscription 模型，但不复制
-   它的实现；等待语义留在唤醒器和 agent 侧，而不塞进订阅过滤器。
+2. **唤醒 ≠ 授权**：activation 只带四个唤醒字段；正文回 AgentInbox `inbox read`。
+   是否处理、是否建 task 由 agent 侧按 inbox 内容判断。
+3. **复用 AgentInbox 的模型**：使用 host/source/subscription 拓扑，实现留在
+   AgentInbox；等待语义留在唤醒器和 agent 侧。
 
 ## 4. 一条事件的生命周期
 
@@ -81,14 +81,13 @@ agent 侧                coordinator 读 inbox · intake · task orchestration
    - 只把可执行事件建/更新为 task
    - `ack --through` 只确认已审过的条目
 
-前六步只做搬运和叫醒。`read / 进件 / ack` 归 agent 侧；worker 只读 task brief，不知道
-AgentInbox 存在。
+前六步只做搬运和叫醒。`read / 进件 / ack` 归 agent 侧；worker 只处理 task brief，
+AgentInbox 细节留在 coordinator。
 
 ## 5. activation 到 agent
 
-`POST /sources/{id}/events` 不返回 inbox entry id；`newEntryCount` 和
-`latestEntryId` 只有订阅匹配、写入 inbox 后才存在。因此 flume 不能自己编 entry id，
-而是等待 AgentInbox 写箱后的 activation。
+inbox entry id 由 AgentInbox 生成：source event 写入后，AgentInbox 通过 activation
+带上 `newEntryCount` 和 `latestEntryId`。flume 等这次写入完成后唤醒 agent。
 
 当前示例路径是执行唤醒器命令：
 
@@ -97,8 +96,8 @@ wake <coordinator-agent> "<固定唤醒文本>"
 ```
 
 prompt 只包含配置中的 `agentId`、经过校验的 `newEntryCount`、intake skill 路径和
-固定指令；`latestEntryId` 和 `summary` 留在 flume 日志中。flume **不执行、不解析**
-这个 skill，只把路径交给 agent。coordinator 用 AgentInbox skill 读取 inbox，再读取
+固定指令；`latestEntryId` 和 `summary` 留在 flume 日志中。flume 把 skill 路径交给
+agent，由 agent 加载执行。coordinator 用 AgentInbox skill 读取 inbox，再读取
 `FLUME_AGENTINBOX_INTAKE_SKILL` 指向的策略文件。
 
 agent 侧分三层：
@@ -113,17 +112,17 @@ coordinator
 
 intake 只决定“做不做、做哪个 task”：`REVIEW_REQUEST` 建 task 并派工，
 `FEEDBACK` 找回已有 task 并把原文交回去，`ISSUE_UPDATE` 交回已有 task 或入队，
-`LIFECYCLE` 更新/关闭 task，`NOISE` 只 ack。review 的判据和步骤不在 intake 里，
-由任务执行层的 `review` playbook 执行。策略可以显式允许 review task 派工，但
-approve / merge / close 仍需要明确的人类指令。
+`LIFECYCLE` 更新/关闭 task，`NOISE` 只 ack。review 的判据和步骤归任务执行层的
+`review` playbook。策略可以显式允许 review task 派工；approve / merge / close
+由人类明确指令触发。
 
-flume 仓库自带 `templates/workflow-event-intake/`，但模板不是默认 skill。部署必须
-复制到 agent workspace，修改 `sources/github.md`（或新增 source policy），再把
-`FLUME_AGENTINBOX_INTAKE_SKILL` 指向复制后的 `SKILL.md`。`entries` / `items` 等正文
-一旦出现在 activation payload 中，flume 直接返回 400。
+flume 仓库提供 `templates/workflow-event-intake/` 作为起点。复制到 agent workspace，
+修改 `sources/github.md`（或新增 source policy），再把
+`FLUME_AGENTINBOX_INTAKE_SKILL` 指向复制后的 `SKILL.md`。activation payload 出现
+`entries` / `items` 等正文时，flume 返回 400。
 
-`FLUME_HERDR_WAKE_AGENT` 是当前 herdr 示例中的 coordinator agent 名，不是
-workspace 名。超时由 `FLUME_HERDR_WAKE_TIMEOUT` 控制。
+`FLUME_HERDR_WAKE_AGENT` 指定当前 herdr 示例中的 coordinator agent 名；workspace
+名独立配置。超时由 `FLUME_HERDR_WAKE_TIMEOUT` 控制。
 
 ### 5.1 HTTP 唤醒兼容模式
 
@@ -143,15 +142,15 @@ X-Flume-Activation-Mode: activation_only
 }
 ```
 
-这是非 herdr 唤醒器的兼容接口，不是当前示例路径。两种模式都只尝试一次，不排队、
-不重试、不落盘。
+这是外部 HTTP 唤醒器的兼容接口；herdr 示例走命令唤醒。两种模式都只尝试一次，
+失败交给 AgentInbox 重试。
 
 | activation 字段 | agent 侧语义 |
 | :--- | :--- |
 | `kind` | 必须是 `agentinbox.activation` |
 | `newEntryCount` | `> 0` 才唤醒；`0` 是空激活 |
 | `latestEntryId` | `inbox read` 后执行 `ack --through <latestEntryId>` |
-| `summary` | 只用于显示与日志，不参与授权 |
+| `summary` | 只用于显示与日志；授权依据来自 inbox |
 
 唤醒器失败时 flume 向 AgentInbox 返回 502，由 AgentInbox 的投递机制重试。
 
@@ -177,7 +176,7 @@ flume 内部唯一事件形状，adapter 负责把各家 payload 折成它：
 | `occurred_at` | ISO8601，取事件自身时间戳 |
 | `source` | 系统名，等于 adapter 的 `NAME` |
 | `subject` | 人可读对象定位，例如 `owner/repo#42` |
-| `payload` | 供应商原始 JSON，不裁剪 |
+| `payload` | 供应商原始 JSON |
 
 `native_id` 服务于收件箱去重，`event` 服务于订阅过滤，`subject` 服务于 coordinator
 按项目/资源聚合。
@@ -202,13 +201,13 @@ flume 内部唯一事件形状，adapter 负责把各家 payload 折成它：
 
 启动时 flume 探测 `~/.agentinbox/agentinbox.sock`：
 
-- 已有 daemon → attach，不接管其生命周期。
-- 没有 daemon 且允许 autostart → spawn `agentinbox serve` 并 owned。
-- 禁止 autostart → 等待已有 daemon，超时退出。
+- 已有 daemon → attach，沿用其生命周期。
+- 需要 autostart → spawn `agentinbox serve` 并 owned。
+- autostart 关闭 → 等待已有 daemon，超时退出。
 
-生产环境只有一个用户级 LaunchAgent，label 固定为 `com.flume`。事件源不影响 job
-名称；GitHub / GitLab 只由 `FLUME_ADAPTERS` 选择。AgentInbox 不单独建 launchd
-job，也不是第三个常驻服务。
+生产环境使用一个用户级 LaunchAgent，label 固定为 `com.flume`。事件源不影响 job
+名称；GitHub / GitLab 由 `FLUME_ADAPTERS` 选择。AgentInbox 的生命周期由 flume
+管理：flume 启动时 attach 已有 daemon，或启动并持有自己的 daemon。
 
 ### 7.2 feed 接缝
 
@@ -220,7 +219,7 @@ job，也不是第三个常驻服务。
 | HTTP（默认） | `POST /sources/{id}/events`，unix socket | 快；HTTP 面相对稳定 |
 | CLI（后备） | spawn `agentinbox source event` | 最朴素，容错兜底 |
 
-CLI 当前没有把 `feedFn` 做成插件；嵌入 `createFlumeServer` 时可以注入别的 feed。
+CLI 使用默认 feed；嵌入 `createFlumeServer` 时可以注入别的 feed。
 
 ### 7.3 替换点
 
@@ -228,12 +227,12 @@ CLI 当前没有把 `feedFn` 做成插件；嵌入 `createFlumeServer` 时可以
 | :--- | :--- | :--- | :--- |
 | 事件源 | `src/adapters/index.ts` 的 `Adapter` | 实现 `NAME` / `SECRET_ENV` / `verify` / `normalize`，加入 `ADAPTERS` 和 `FLUME_ADAPTERS` | `github`、`gitlab`；路由为 `/NAME` |
 | 收件箱 | `src/core.ts` 的 `FeedFunction`，默认 `src/feed.ts` | 嵌入时注入 `feedFn`；换 CLI 默认还要改入口和配置 | AgentInbox |
-| 唤醒器 | `src/activation.ts` 的 `dispatchHerdrPrompt` / `dispatchActivation` | 改 `activation.ts`；外部 HTTP 唤醒器可先用 URL 模式 | herdr；未插件化 |
+| 唤醒器 | `src/activation.ts` 的 `dispatchHerdrPrompt` / `dispatchActivation` | 改 `activation.ts`；外部 HTTP 唤醒器可先用 URL 模式 | herdr；`dispatchHerdrPrompt` 直连 |
 
-事件源已经有明确接口；收件箱可注入但 CLI 未插件化；唤醒默认直接 exec 唤醒器，另有
-HTTP 兼容模式。不要把这三个接缝描述成已完成的通用插件体系。
+事件源使用 `Adapter` 接口；收件箱通过 `FeedFunction` 注入；唤醒器通过
+`dispatchHerdrPrompt` 或 HTTP 模式接入。三个接缝按当前接口扩展。
 
-### 7.4 不 fork、不上插件
+### 7.4 实现边界
 
 - fork 会把耦合钉在实现上，后续持续承担 rebase 成本。
 - AgentInbox 的远程模块扩展面已 deprecated；当前走 local_event host 的受支持用法。
@@ -251,7 +250,8 @@ export function normalize(headers, body, document): Envelope;
 ```
 
 然后在 `src/adapters/index.ts` 注册。`SECRET_ENV` 自动进入启动必填名单。
-adapter 只验签和折 envelope，不排队、不重试、不落盘、不做过滤、不决定唤醒。
+adapter 负责验签和折 envelope；排队、重试、落盘、过滤和唤醒决策由 AgentInbox
+与唤醒器承担。
 
 测试至少覆盖：
 
@@ -281,11 +281,11 @@ adapter 只验签和折 envelope，不排队、不重试、不落盘、不做过
 3. 错误路径：400 / 401 / 413 / 502。
 4. activation：直接唤醒命令、HTTP 兼容模式、四字段合同和正文拒收。
 
-## 10. 明确不做的事
+## 10. 职责边界
 
-- 不做第二套投递（队列、重试、死信）——由 AgentInbox 负责。
-- 不做事件存储或回放——由 AgentInbox durable stream 负责。
-- 不做业务过滤——由 AgentInbox subscription 负责。
-- 不做唤醒策略（退避、租约、攒批）——由 AgentInbox 通知策略和唤醒器 turn 调度负责。
-- 不做定时全量巡检——事件源变更由 webhook → AgentInbox activation 驱动。
-- 不 import AgentInbox 内部模块、不 fork、不融仓库。
+- 队列、重试和死信由 AgentInbox 负责。
+- 事件存储与回放由 AgentInbox durable stream 负责。
+- 业务过滤由 AgentInbox subscription 负责。
+- 唤醒策略（退避、租约、攒批）由 AgentInbox 通知策略和唤醒器 turn 调度负责。
+- 事件源变更通过 webhook → AgentInbox activation 驱动。
+- flume 通过 AgentInbox 的公开 host/source API 集成，仓库、依赖和发布保持独立。

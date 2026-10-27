@@ -5,7 +5,7 @@
 
 ## 1. 删除事件源 webhook
 
-只删除指向本 flume 的 webhook，不要改项目上的其他 hook。
+删除指向本 flume 的 webhook，项目上的其他 hook 保留。
 
 GitHub：仓库 **Settings → Webhooks**，删除 Payload URL 为
 `http://<flume-host>:<port>/github` 的 hook。
@@ -13,11 +13,11 @@ GitHub：仓库 **Settings → Webhooks**，删除 Payload URL 为
 GitLab：项目 **Settings → Webhooks**，删除 URL 为
 `http://<flume-host>:<port>/gitlab` 的 hook。
 
-确认项目上不再有指向该 flume 的 hook。
+确认 hook 列表符合预期。
 
 ## 2. 停止 flume
 
-常驻部署只有一个 job：
+常驻部署的 job 是 `com.flume`：
 
 ```bash
 launchctl bootout "gui/$(id -u)/com.flume" 2>/dev/null || true
@@ -27,13 +27,13 @@ launchctl bootout "gui/$(id -u)/com.flume" 2>/dev/null || true
 
 ```bash
 curl -sS --max-time 2 http://127.0.0.1:<port>/healthz
-# 预期：连接失败，而不是 {"ok":true}
+# 预期：连接失败，curl 返回非 0
 
 lsof -nP -iTCP:<port> -sTCP:LISTEN
 ```
 
-如果是前台运行，只在对应终端按 `Ctrl-C`。不要用宽泛的 `pkill node`；同机可能有
-其他 Node / AgentInbox 进程。
+如果是前台运行，只在对应终端按 `Ctrl-C`。按 PID 或 launchd 停止进程；宽泛的
+`pkill node` 会影响同机其他 Node / AgentInbox 进程。
 
 ## 3. 移除自启入口
 
@@ -41,21 +41,19 @@ lsof -nP -iTCP:<port> -sTCP:LISTEN
 unlink "$HOME/Library/LaunchAgents/com.flume.plist"
 ```
 
-确认 job 已不存在：
+确认 job 已移除：
 
 ```bash
 launchctl print "gui/$(id -u)/com.flume" 2>&1 | head
 # 预期：Could not find service
 ```
 
-当前没有 AgentInbox launchd job，也没有 wake gate job。若 AgentInbox daemon 是由
-flume 自举的子进程，停止 flume 后它会一起退出；若本机原本就有共享 daemon，它会
-继续运行。
+AgentInbox daemon 由 flume 启动或 attach：由 flume 启动的子进程会随 flume 退出；
+本机原有的共享 daemon 会继续运行。
 
-## 4. 清理 AgentInbox 路由（仅限专用配置）
+## 4. 清理专用 AgentInbox 路由
 
-如果该 source、subscription 或 agent 还服务其他系统，跳过这一步。只删除本部署
-专用的配置：
+该 source、subscription 或 agent 专供本部署时，执行这一步；共享配置保留：
 
 ```bash
 agentinbox agent target list <agent-id>
@@ -70,8 +68,8 @@ agentinbox subscription remove <subscription-id>
 agentinbox agent remove <agent-id>
 ```
 
-不要删除共享的 `~/.agentinbox`。历史 durable stream 可以按保留策略自然过期，不需要
-为了撤除而清库。
+共享的 `~/.agentinbox` 继续供其他 agent 使用；本部署的 durable stream 按保留策略
+自然过期。
 
 ## 5. 撤销 Secret
 
@@ -93,8 +91,8 @@ security delete-generic-password -a flume -s flume-gitlab-webhook
 rm -f logs/flume.launchd.log logs/flume.launchd.err.log
 ```
 
-仓库本身可以保留；它不是运行态依赖。不要删除共享的 `~/.agentinbox` 或其他项目的
-LaunchAgent。
+仓库用于再次启动和升级；运行态数据在 AgentInbox、日志和 Keychain 中。共享的
+`~/.agentinbox` 和其他项目的 LaunchAgent 保留。
 
 ## 7. 撤除后确认
 

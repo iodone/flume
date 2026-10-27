@@ -7,12 +7,12 @@
 | GitHub（示例） | `POST /github` | `FLUME_GITHUB_SECRET` | Pull request、Review、Review comment、Issue、Issue comment、Push、Workflow run |
 | GitLab（可选） | `POST /gitlab` | `FLUME_GITLAB_TOKEN` | Merge request、Pipeline、Note、Push、Issue，其他事件归一为 `<object_kind>.received` |
 
-用 `FLUME_ADAPTERS` 选择启用的来源（逗号分隔）。未启用的路径返回 404，也不会要求
-它的 secret。
+用 `FLUME_ADAPTERS` 选择启用的来源（逗号分隔）。启用来源注册路由并校验 secret；
+其他路径返回 404。
 
-`/healthz` 和 `/activation` 是 core 端点，不属于 adapter。
+`/healthz` 和 `/activation` 由 core 提供。
 
-Adapter 分两层，不要混：
+Adapter 分两层：
 
 | 层 | 位置 | 负责 |
 | :--- | :--- | :--- |
@@ -21,7 +21,7 @@ Adapter 分两层，不要混：
 
 flume adapter 只保证 `source` 和 `event` 稳定；review / feedback / issue 的语义
 由 agent 侧的 intake skill 解释。新增来源时两层可以独立扩展。模板在
-`templates/workflow-event-intake/`，只是参考，不是默认策略。
+`templates/workflow-event-intake/`，复制到 agent workspace 后按部署配置 source policy。
 
 ### GitHub adapter
 
@@ -48,7 +48,7 @@ export function normalize(headers, body, document): Envelope;
 - `SECRET_ENV` 自动进入启动必填名单，缺失时进程以退出码 2 结束。
 - `verify` 只做验签：`true` 放行，`false` 返回 401。
 - `normalize` 只做归一：返回 `Envelope`；抛 `EnvelopeError` 返回 400。
-- adapter 内不排队、不重试、不落盘、不做订阅过滤、不决定唤醒。
+- 排队、重试、落盘、订阅过滤和唤醒决策由 AgentInbox 与唤醒器承担。
 
 ## Envelope 字段
 
@@ -120,7 +120,7 @@ const ADAPTERS: readonly Adapter[] = [gitlab, jira];
 
 ### 3. 配置 secret
 
-在 `run-flume.sh` 中加默认值或 keychain 读取。缺少 `SECRET_ENV` 时 flume 不会启动：
+在 `run-flume.sh` 中加默认值或 keychain 读取。`SECRET_ENV` 是启动必填项，缺失时进程以退出码 2 结束：
 
 ```bash
 export FLUME_JIRA_TOKEN="${FLUME_JIRA_TOKEN:-$(security find-generic-password -a flume -s flume-jira-webhook -w)}"
@@ -154,7 +154,7 @@ curl -sS -X POST http://127.0.0.1:19420/jira \
 期望：`202 {"accepted":1}`。401 是 token 错，400 是 payload/envelope 不合法，
 502 是 AgentInbox 拒收。联调建议使用测试 source，避免污染正式 inbox。
 
-## 不需要改的地方
+## 扩展边界
 
-`core.ts`、`feed.ts`、`envelope.ts` 和唤醒链路都不需要动。请求体上限 8MB，
-payload 必须是 JSON object。
+扩展只涉及 adapter 和 source policy；`core.ts`、`feed.ts`、`envelope.ts` 和唤醒链路
+保持稳定。请求体上限 8MB，payload 必须是 JSON object。
