@@ -1,4 +1,9 @@
-# 撤除内网 GitLab 接入
+# 撤除当前接线：内网 GitLab → AgentInbox → herdr
+
+> flume 是零状态事件转运层；事件源、收件箱和唤醒器都可替换。本文只撤除当前试点
+> 接线：内网 GitLab 事件源、AgentInbox 收件箱和 herdr 唤醒门。替换点见
+> [`ARCHITECTURE.md` 的三个替换点](ARCHITECTURE.md#54-三个替换点)；换用其他实现时，
+> 按角色撤除对应 source、inbox 和唤醒路由，而不是把本页当作通用卸载协议。
 
 按下面的顺序撤除，先停止新事件进入，再清理接收端。不要先删本地状态：否则 Webhook
 在撤除窗口内仍会投递并产生失败重试。
@@ -49,7 +54,7 @@ lsof -nP -iTCP:18924 -sTCP:LISTEN
 如果 flume 是用前台命令启动的，只在该终端按 `Ctrl-C`。不要用宽泛的
 `pkill node`，同机可能还有别的 Node/AgentInbox 服务。
 
-## 3. 清理 AgentInbox 路由（可选但推荐）
+## 3. 清理当前收件箱 AgentInbox 路由（可选但推荐）
 
 只删除本试点专用的 target、subscription 和 agent。先查出 ID：
 
@@ -69,7 +74,7 @@ agentinbox agent remove herdr-main
 如果该 agent 或 subscription 还服务别的 source，不要删除；只撤销
 `olap/miergo` 的 webhook 和 flume 接收端口即可。
 
-## 4. 停止并卸载 AgentInbox LaunchAgent
+## 4. 停止并卸载当前 AgentInbox LaunchAgent
 
 路由清理完成后，再停本试点专用的 daemon job：
 
@@ -117,5 +122,5 @@ test -z "$(glab api --hostname git.n.xiaomi.com projects/262378/hooks |
   jq -r '.[] | select(.url == "http://10.224.202.16:19420/gitlab") | .id')"
 ```
 
-命令退出码为 `0` 表示项目上没有残留的本 flume hook。AgentInbox 中已有历史 event
+命令退出码为 `0` 表示项目上没有残留的本 flume hook。当前 AgentInbox 中已有历史 event
 可以按保留策略过期为垃圾回收，不需要为了撤除删除 durable stream。

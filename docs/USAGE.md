@@ -3,8 +3,31 @@
 > 快速安装与最小启动见 [`README.md`](../README.md)。架构见
 > [`ARCHITECTURE.md`](ARCHITECTURE.md)，卸载见 [`REMOVAL.md`](REMOVAL.md)。
 
-本文承接 README 之外的使用细节：本地自测、真实 GitLab 接入、herdr 唤醒门、
-launchd 常驻、排错、进程模型、配置语义、端点和 adapter 扩展。
+flume 是零状态事件转运层：**验签 → 归一成统一 envelope → 喂进收件箱 → 转发
+唤醒**。事件源、收件箱和唤醒器都是可替换角色。本文先从接口说明替换点，再以**当前
+接线**为例给出安装、接入、常驻和排错步骤。
+
+> **当前接线（不是项目定义）：** 内网 GitLab（`git.n.xiaomi.com`）作为事件源，
+> AgentInbox 作为收件箱，herdr 的 `activation_only` 门作为唤醒器。这三者都是今天
+> 的试点实现；本文后续操作与输出也以这组实现为准。
+
+## 替换点：事件源、收件箱、唤醒器
+
+| 角色 | 文件 / 接口 | 换实现要做什么 | 当前约束 |
+| :--- | :--- | :--- | :--- |
+| 事件源 | `src/adapters/index.ts` 的 `Adapter` | 实现 `NAME` / `SECRET_ENV` / `verify` / `normalize → Envelope`，再加进 `ADAPTERS` 注册表 | 当前注册表只有 `gitlab`；路由固定为 `/NAME`，`SECRET_ENV` 自动成为必填项 |
+| 收件箱 | `src/core.ts` 的 `FeedFunction`：`feedFn(envelope, { sourceId })` | 保持 envelope 契约，注入自己的 feed；现有默认实现是 `src/feed.ts` 的 AgentInbox source event | CLI 当前固定使用默认 feed；安装后的 `flume start` 换收件箱还要改默认接线与 `AGENTINBOX_SOURCE_ID` 配置 |
+| 唤醒器 | `src/activation.ts` 的 `Activation` / `dispatchActivation`，以及 `src/core.ts` 的 `/activation` 路由 | 只换接收地址时设置 `FLUME_HERDR_WAKE_URL`；换 payload、请求头或等待语义时要改 `activation.ts` 和调用它的 core | 当前实现是 herdr：固定转发 `kind/newEntryCount/latestEntryId/summary` 四字段，并带 `X-Flume-Activation-Mode: activation_only` |
+
+**接口没有比实现更通用。** 事件源已有明确的 `Adapter` 接缝；收件箱有
+`FeedFunction`，但 CLI 尚未把它做成插件；唤醒器只有可换 URL，没有独立接口。
+envelope 的 `native_id` / `event` / `subject` 语义、`agentinbox.activation` 的
+kind 与四字段合同、`AGENTINBOX_*` / `FLUME_HERDR_*` 配置命名，以及 launchd
+脚本，仍围着当前这组实现转。换事件源通常不动 core；换收件箱或唤醒协议则不能只改
+一个环境变量。
+
+以下是当前接线的操作细节；新增事件源的代码示例见
+[替换事件源：新增 adapter](#替换事件源新增-adapter)。
 
 ## 安装与启动补充
 
@@ -68,7 +91,7 @@ flume: listening on 127.0.0.1:9420; agentinbox attached at /Users/mi/.agentinbox
 
 保持这个终端运行，后续 curl 在另一个终端执行。
 
-## 本地自测：不依赖真实 GitLab 或 AgentInbox source
+## 本地自测：不依赖当前 GitLab 事件源或 AgentInbox
 
 检查 HTTP 入口：
 
@@ -118,9 +141,11 @@ flume: activation rejected: FLUME_HERDR_WAKE_URL is not set
 smoke: passed
 ```
 
-## 接真 GitLab webhook
+## 接真 GitLab webhook（当前事件源）
 
-先在另一个终端创建 AgentInbox 宿主、source、agent 与 subscription。flume 启动的 daemon 已在运行，直接执行即可。
+以下用当前收件箱 AgentInbox 和当前事件源 GitLab 走一遍真实链路。先在另一个终端
+创建 AgentInbox 宿主、source、agent 与 subscription。flume 启动的 daemon 已在
+运行，直接执行即可。
 
 ```bash
 HOST_ID=$(agentinbox host add local_event flume | node -pe 'JSON.parse(require("fs").readFileSync(0, "utf8")).hostId')
@@ -287,11 +312,12 @@ done
 
 本机 curl 使用 `127.0.0.1`；GitLab 在另一台机器时，Webhook URL 必须使用 GitLab 能访问到的 flume 内网地址。
 
-## 接内网 GitLab（git.n.xiaomi.com）
+## 当前事件源试点：内网 GitLab（git.n.xiaomi.com）
 
 > 状态（2026-10-26）：`olap/miergo` 的项目级 webhook 已接入真实
 > `git.n.xiaomi.com` 事件。MR、评论、分支推送和流水线事件均已完成端到端验证；
-> 不再依赖 WVR 定时巡检来发现这些事件。
+> 不再依赖 WVR 定时巡检来发现这些事件。这是当前 GitLab adapter 的试点接线，
+> 不是 flume 的适用范围。
 
 撤除步骤见 [`REMOVAL.md`](REMOVAL.md)。
 
@@ -432,9 +458,11 @@ GitLab 的 webhook 编辑页在 URL 变化时可能要求重新填写 Secret tok
 | inbox 有条目但 herdr 没醒 | activation target 或 `FLUME_HERDR_WAKE_URL` 不通 | 检查 target URL、flume `/activation` 日志与唤醒门日志 |
 | inbox 有条目但 herdr 暂时没醒，且 `activationDispatchStates.status=dirty` | AgentInbox 的 `notifyLeaseMs`（默认 600000 ms）正在合并唤醒，`leaseExpiresAt` 前不会再次投递 | 这是防刷屏合并，不是丢事件；需要逐事件唤醒时调小 target 的 `notify-lease-ms` |
 
-## 接 herdr 唤醒门
+## 当前唤醒器：herdr 唤醒门
 
-下面用本机地址确认配置形状；真实部署时只把这个值换成 herdr 唤醒门入口。这个 URL 是 flume 从 `/activation` 转发到的目标，不是 AgentInbox 的目标。
+下面用本机地址确认当前 herdr 唤醒门的配置形状。换一个接受同一四字段协议的唤醒
+接收器时，只需改 URL；换协议要改 `src/activation.ts`。这个 URL 是 flume 从
+`/activation` 转发到的目标，不是 AgentInbox 的目标。
 
 ```bash
 export FLUME_HERDR_WAKE_URL=http://127.0.0.1:18080/wake
@@ -631,7 +659,7 @@ rm ~/.config/flume/flume.env
 | `POST /activation` 返回 `502 {"error":"wake gate failed"}` | 唤醒门不可达、超时或返回非 2xx | 检查 `FLUME_HERDR_WAKE_URL`、网络与唤醒门状态 |
 | 请求返回 `413 {"error":"body too large"}` | webhook body 超过 8MB | 缩小 payload；flume 不接收超限 body |
 
-## 进程模型
+## 当前接线的进程模型
 
 **开发态一条命令；常驻态两个独立 job。** 前台运行 `flume start` 时，flume 探
 `~/.agentinbox/agentinbox.sock`，没有就自举，已在运行就 attach（ensure ≠ own）。
@@ -646,7 +674,7 @@ rm ~/.config/flume/flume.env
 | herdr coordinator | 常驻判断位 | 查等待表、授权、`inbox read`、进件、`ack --through` |
 | worker | 随 run | 只读 brief 干活，不知道 AgentInbox 存在 |
 
-事件链无轮询：
+当前接线的无轮询事件链：
 
 ```text
 GitLab
@@ -738,6 +766,8 @@ token 不进仓库、日志、响应体、plist 或命令行。缺必填项直�
 
 ## 端点
 
+下表是当前注册表与激活协议暴露的端点，不是可替换实现的固定 API。
+
 | 方法 | 路径 | 结果 |
 | :--- | :--- | :--- |
 | `POST` | `/gitlab` | `202 {"accepted":1}`；400 非 JSON/非法 envelope；401 token 错；413 超 8MB；502 feed 失败 |
@@ -746,9 +776,10 @@ token 不进仓库、日志、响应体、plist 或命令行。缺必填项直�
 
 flume 不重试。事件 502 交给 GitLab 投递重试；相同投递的 `native_id` 不变，由 AgentInbox 去重。activation 502 交给 AgentInbox 的 webhook 投递机制重试。
 
-## 唤醒链路
+## 当前唤醒链路
 
-AgentInbox 写 inbox 后向 flume `/activation` 发 webhook。flume 只接受四个唤醒字段：
+当前收件箱 AgentInbox 写 inbox 后向 flume `/activation` 发 webhook；当前唤醒器是
+herdr。flume 只接受四个唤醒字段：
 
 ```json
 {
@@ -775,7 +806,7 @@ AgentInbox 写 inbox 后向 flume `/activation` 发 webhook。flume 只接受四
 
 **唤醒 ≠ 授权。** flume 不决定是否开 turn；唤醒门命中后仍要过授权门，正文仍要回 `inbox read`。
 
-## 事件归一
+## 当前事件源的归一
 
 `gitlab` adapter 的映射：
 
@@ -789,9 +820,10 @@ AgentInbox 写 inbox 后向 flume `/activation` 发 webhook。flume 只接受四
 
 `native_id` 优先 `X-Gitlab-Event-UUID`，其次 `X-Gitlab-Webhook-UUID`，都没有则对 raw body 做 SHA-256。同一投递重试得到同一 id。
 
-## 新增 adapter
+## 替换事件源：新增 adapter
 
-adapter 只有两件事：验签、折 envelope。core 不动，`src/adapters/` 加一个文件并在 `src/adapters/index.ts` 注册。
+这是三个替换点里最完整的一个。adapter 只有两件事：验签、折 envelope。core 不动，
+`src/adapters/` 加一个文件并在 `src/adapters/index.ts` 的 `ADAPTERS` 注册。
 
 ```typescript
 export const NAME = "jira";
@@ -810,7 +842,7 @@ export function normalize(headers, body, document): Envelope {
 
 ## 明确不做的事
 
-- 不做第二套投递（队列、重试、死信）——AgentInbox 已有
-- 不做事件存储或回放——durable stream 已有
-- 不做业务过滤——subscription 已有
-- 不做唤醒策略——AgentInbox 通知策略与 herdr 授权门已有
+- 不做第二套投递（队列、重试、死信）——当前交给 AgentInbox；换收件箱也仍由该层负责
+- 不做事件存储或回放——当前由 AgentInbox durable stream 负责
+- 不做业务过滤——当前由 AgentInbox subscription 负责
+- 不做唤醒策略——当前由 AgentInbox 通知策略与 herdr 授权门负责
