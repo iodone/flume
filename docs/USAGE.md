@@ -104,7 +104,7 @@ FLUME_AGENTINBOX_INTAKE_SKILL=/path/to/your-agent/.agents/skills/workflow-event-
      /path/to/your-agent/.agents/skills/
    ```
 
-2. 编辑 `sources/github.md`，填 `ME`、`BOARD_REPO`、`REVIEW_ROOT`、`BOARD_SHORT_KEY`，并按你的 board 调整命令。
+2. 编辑 `sources/github.md`，填 `GITHUB_LOGIN`、`TASK_CLI`、`TASK_REPO`、`TASK_PREFIX`、`REVIEW_WORKSPACE`，并按你的任务系统调整命令。
 3. 设置 `FLUME_AGENTINBOX_INTAKE_SKILL` 指向复制后的 `SKILL.md`。
 4. 重启 flume，让新路径进入 activation prompt。
 

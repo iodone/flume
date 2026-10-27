@@ -1,38 +1,39 @@
-# GitLab source adapter
+# GitLab source policy
 
-Fill the configuration block before use. This is a template, not a zero-config
-policy for a real GitLab instance.
+This is a reference policy, not a default skill. Copy it into the agent workspace
+and adapt it to your task system before use.
 
 ## Configuration
 
 ```bash
-ME='<gitlab-username>'
-BOARD_REPO='<board-repo>'
-REVIEW_ROOT='/path/to/review'
-DEFAULT_BRANCH_PREFIX='work/'
-BOARD_SHORT_KEY='<board-short-key>'
+GITLAB_USERNAME='<gitlab-username>'
+TASK_CLI='<task-cli>'
+TASK_REPO='<task-repo>'
+TASK_PREFIX='<task-prefix>'
+BRANCH_PREFIX='work/'
+REVIEW_WORKSPACE='<review-workspace>'
 ```
 
-`ME`, `BOARD_REPO`, `REVIEW_ROOT`, and `BOARD_SHORT_KEY` are deployment values.
-Keep them here or read them from the coordinator's standing instructions.
+These are deployment values. Keep them here or read them from the coordinator's
+standing instructions.
 
 ## Event to intent
 
 | GitLab event | Intent | Condition |
 | :--- | :--- | :--- |
-| `merge_request.opened` / `reopened` / `updated` | `REVIEW_REQUEST` | author is not `ME`, `ME` is reviewer or assignee, not Draft |
+| `merge_request.opened` / `reopened` / `updated` | `REVIEW_REQUEST` | author is not `GITLAB_USERNAME`, `GITLAB_USERNAME` is reviewer or assignee, not Draft |
 | `note.created` on a merge request | `REVIEW_REQUEST` | same as above and the note is a human review request |
-| `note.created` on a merge request | `FEEDBACK` | MR author is `ME`, note author is not `ME`, note is not system |
-| `merge_request.approved` / `unapproved` | `FEEDBACK` | MR author is `ME`; treat as task continuation, never auto-merge |
-| `issue.opened` | `ISSUE_UPDATE` | assigned to `ME`; queue the task, do not auto-start |
-| `issue.updated` / issue note | `ISSUE_UPDATE` | `ME` is assignee or an existing task references the issue |
+| `note.created` on a merge request | `FEEDBACK` | MR author is `GITLAB_USERNAME`, note author is not `GITLAB_USERNAME`, note is not system |
+| `merge_request.approved` / `unapproved` | `FEEDBACK` | MR author is `GITLAB_USERNAME`; treat as task continuation, never auto-merge |
+| `issue.opened` | `ISSUE_UPDATE` | assigned to `GITLAB_USERNAME`; queue the task, do not auto-start |
+| `issue.updated` / issue note | `ISSUE_UPDATE` | `GITLAB_USERNAME` is assignee or an existing task references the issue |
 | `merge_request.merged` / `closed` | `LIFECYCLE` | update or close the matching task |
 | `issue.closed` | `LIFECYCLE` | update or close the matching task |
 | `pipeline.*`, `push`, duplicate delivery | `NOISE` | inspect, then ack |
 
 When an MR can be both a review request and feedback, decide by author:
-`author == ME` is feedback; otherwise it is a review request if `ME` is a
-reviewer or assignee.
+`author == GITLAB_USERNAME` is feedback; otherwise it is a review request if
+`GITLAB_USERNAME` is a reviewer or assignee.
 
 ## Resolve current state
 
@@ -43,19 +44,19 @@ glab mr view <iid> --repo "$REPO" --output json
 glab issue view <iid> --repo "$REPO" --output json
 ```
 
-`REPO` is the full path (`group/project`). `PROJECT` is the last segment.
-`REVIEW_PROJECT` is the path slug (`group-project`):
+`REPO` is the full path (`<group>/<project>`). `PROJECT` is the last segment.
+`REVIEW_PROJECT` is a path-safe project name:
 
 ```bash
-REPO='group/project'
-PROJECT='project'
-REVIEW_PROJECT="${REPO//\//-}"
-KEY="$PROJECT!$IID"
-FULL_KEY="$REPO!$IID"
+REPO='<group>/<project>'
+PROJECT='<project>'
+REVIEW_PROJECT='<project-path-slug>'
+KEY="$REPO!$IID"
 ```
 
-Keep for an MR: `author.username`, `reviewers[].username`, `assignees[].username`,
-`state`, `draft`, `source_branch`, `target_branch`, `sha`, `web_url`, `title`.
+Keep for an MR: `author.username`, `reviewers[].username`,
+`assignees[].username`, `state`, `draft`, `source_branch`, `target_branch`,
+`sha`, `web_url`, `title`.
 For a note, also keep `rawPayload.user.username`,
 `rawPayload.object_attributes.note`, `rawPayload.object_attributes.id`, and
 `created_at`.
@@ -64,9 +65,9 @@ Skip closed or merged MRs and closed issues.
 
 ## Dedupe keys
 
-State file: `$REVIEW_ROOT/intake-state.json`, key `gitlab:<REPO>!<IID>`.
-The same GitLab note can be delivered more than once with different inbox
-`entryId`s. Use `(subject, note id)` as the dedupe key.
+State file: `$REVIEW_WORKSPACE/intake-state.json`, key
+`gitlab:<REPO>!<IID>`. The same GitLab note can be delivered more than once with
+different inbox `entryId`s. Use `(subject, note id)` as the dedupe key.
 
 For a review request, skip when both are true:
 
@@ -81,21 +82,21 @@ twice.
 
 ## Task mapping
 
-- A branch `work/<n>-...` maps to board task `<BOARD_SHORT_KEY>-<n>`.
-  Verify `herdr-projects details <task>` branch equals the MR `source_branch`.
-- A review request searches existing tasks whose title contains `<PROJECT>!<IID>`
-  or `<REPO>!<IID>`.
-- If a matching task is `working`, `reviewing`, or `approval`, do not create
-  another task.
-- If it is `done`, create a new task only when the head sha changed.
+- A branch `<BRANCH_PREFIX><n>-...` maps to the task id convention configured for
+  this deployment (`<TASK_PREFIX><n>` by default).
+- Verify the task's branch matches the MR `source_branch` before continuing it.
+- A review request searches existing tasks whose title contains
+  `<PROJECT>!<IID>` or `<REPO>!<IID>`.
+- If a matching task is active, do not create another task.
+- If it is done, create a new task only when the head revision changed.
 
 ## Review request
 
-Create a review task in the board and start it:
+Create a review task in the configured task system and start it:
 
 ```bash
-herdr-projects add "Review $PROJECT!$IID <short title>" \
-  --repo "$BOARD_REPO" --research --delegate \
+$TASK_CLI add "Review $PROJECT!$IID <short title>" \
+  --repo "$TASK_REPO" --delegate \
   --desc "<brief>"
 ```
 
@@ -112,17 +113,17 @@ Base: <TARGET_BRANCH>
 Author: <AUTHOR>
 Event: <EVENT_VARIANT> (entry <ENTRY_ID>)
 
-Use workflow-dsx playbook: review.
+Use the project's review playbook.
 
-1. Read the project's AGENTS.md and the workflow-gitlab Role: Reviewer.
+1. Read the project instructions and the reviewer role.
 2. Read all human notes before the diff.
-3. git fetch origin <SOURCE_BRANCH>
-4. Create a detached worktree:
-   <REVIEW_ROOT>/worktrees/<REVIEW_PROJECT>/mr-<IID>
-5. Run code-review-graph detect-changes / impact / query. No --brief.
-6. Review Spec / Standards / Structure. Write:
-   <REVIEW_ROOT>/<REVIEW_PROJECT>/mr-<IID>.md
-7. Publish the review comment only under an explicit standing authorization.
+3. Fetch origin <SOURCE_BRANCH>.
+4. Create a detached worktree under:
+   <REVIEW_WORKSPACE>/<REVIEW_PROJECT>/mr-<IID>
+5. Inspect the diff and dependency impact with project-approved tooling.
+6. Review against the project's spec, standards, and structure. Write notes to:
+   <REVIEW_WORKSPACE>/<REVIEW_PROJECT>/mr-<IID>.md
+7. Publish a review comment only under an explicit standing authorization.
    Do not approve, merge, close, resolve, commit, or push.
 ```
 
@@ -138,7 +139,7 @@ MR: <MR_URL>
 Continue <TASK> from the original text. Do not rewrite it into a conclusion.
 ```
 
-For an approval or unapproval, send the state change and the head sha:
+For an approval or unapproval, send the state change and the head revision:
 
 ```text
 GitLab MR !<IID> was <approved|unapproved> by <USER> at <TIME> (head <HEAD_SHA>).
@@ -150,7 +151,7 @@ After sending, update `last_note_id`, `head_sha`, and `last_driven_at`.
 ## Issue update
 
 Search existing task descriptions for the issue URL. If found and idle, send the
-original update. If the issue is new and has no task, add it without `--delegate`.
+original update. If the issue is new and has no task, add it without starting it.
 Do not auto-start new issue work.
 
 ## Lifecycle
