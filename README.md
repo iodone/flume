@@ -61,6 +61,14 @@ curl -sS http://127.0.0.1:19420/healthz
 保存后点 **Test → Merge request events**；返回 `2xx` 即已接入。GitLab 必须能访问
 flume 所在机器的内网地址，不能填 `127.0.0.1`。
 
+## 验证
+
+1. `curl -sS http://127.0.0.1:19420/healthz` 返回 `{"ok":true}`。
+2. GitLab webhook 的 **Test** 返回 `2xx`。
+3. `tail -f logs/flume.launchd.log` 能看到 `accepted event=…` 和 `woke herdr agent=…`。
+4. coordinator 空闲后，board 里出现由 inbox 聚合出的 task；多条事件可能按通知租约
+   合并成一次 activation。coordinator 忙时 activation 排队，不会丢。
+
 ## 默认配置
 
 默认值全部写在 [`run-flume.sh`](run-flume.sh)。需要变更时直接改脚本，或在启动前
@@ -73,6 +81,7 @@ flume 所在机器的内网地址，不能填 `127.0.0.1`。
 | `FLUME_BIND` | `0.0.0.0` | 只允许本机访问时改 `127.0.0.1` |
 | `FLUME_PORT` | `19420` | 端口冲突时；GitLab URL 要同步修改 |
 | `FLUME_HERDR_WAKE_AGENT` | `sw-coordinator` | 换 herdr-projects 的 coordinator 时 |
+| `FLUME_AGENTINBOX_AGENT_ID` | `herdr-main` | 换 coordinator 的 AgentInbox agent 时 |
 | `HERDR_BIN_PATH` | `/Users/mi/.local/bin/herdr` | herdr 安装位置不同时 |
 | `FLUME_HERDR_WAKE_TIMEOUT` | `10` | 唤醒命令经常超时时 |
 
@@ -133,26 +142,22 @@ AI -> AI : 去重 · 订阅匹配 · 写 inbox
 == 唤醒 coordinator ==
 AI -> FL : POST /activation（四字段，不带正文）
 activate FL
-FL -> CO : herdr agent prompt sw-coordinator\n（只携带 newEntryCount）
+FL -> CO : herdr agent prompt sw-coordinator\n（agentId + newEntryCount + 固定 intake 指令）
 deactivate FL
 deactivate AI
 
-== 判断、进件、派工 ==
+== 读取、聚合、进件 ==
 activate CO
-CO -> CO : 查等待表 wake_condition
-alt 未命中
-  CO -> CO : 条目留待，不烧钱
-else 命中（过授权门）
-  CO -> AI : inbox read（取正文）
-  activate AI
-  AI --> CO : 事件内容
-  deactivate AI
-  CO -> BD : 建 board task + brief
-  CO -> AI : ack --through（进件即销账）
-end
+CO -> AI : inbox read（有界批次）
+activate AI
+AI --> CO : unacked entries
+deactivate AI
+CO -> CO : 按 project/resource 聚合
+CO -> BD : 只把可执行事件建/更新为 task
+CO -> AI : ack --through（只确认已审条目）
 deactivate CO
 
-BD -> WK : 派工（brief）
+BD -> WK : 按 board 设置派工（activation 不自动放行）
 activate WK
 WK -> WK : 执行 run（只读 brief）
 WK -> BD : 完成线 · 评审门 · 合并
@@ -160,7 +165,7 @@ deactivate WK
 
 note right of CO
   flume 只搬运和叫醒
-  read / 进件 / ack 归 coordinator
+  read / 聚合 / 进件 / ack 归 coordinator
   worker 的世界里只有 brief
 end note
 
@@ -168,4 +173,5 @@ end note
 ```
 
 只有 flume 是 launchd 的常驻入口；AgentInbox daemon 由 flume ensure，coordinator
-属于 herdr-projects 的运行态。等待表判据和排错见 [`docs/USAGE.md`](docs/USAGE.md)。
+属于 herdr-projects 的运行态。coordinator 的 turn 是串行的：它正在处理别的请求时，
+activation 会排队到当前 turn 结束，不会丢。排错见 [`docs/USAGE.md`](docs/USAGE.md)。

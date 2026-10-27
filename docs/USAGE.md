@@ -115,6 +115,7 @@ glab api --hostname git.n.xiaomi.com --method POST \
 | `FLUME_BIND` | `0.0.0.0` | 内网 GitLab 可访问；只允许本机时改 `127.0.0.1` |
 | `FLUME_PORT` | `19420` | 监听端口；修改后同步 GitLab webhook URL |
 | `FLUME_HERDR_WAKE_AGENT` | `sw-coordinator` | `herdr-projects` 的 coordinator agent，不是 workspace 名 |
+| `FLUME_AGENTINBOX_AGENT_ID` | `herdr-main` | coordinator 在 AgentInbox 中的 agent id，用于读取和确认 inbox |
 | `HERDR_BIN_PATH` | `/Users/mi/.local/bin/herdr` | herdr 可执行文件路径 |
 | `FLUME_HERDR_WAKE_TIMEOUT` | `10` | `herdr agent prompt` 超时，单位秒 |
 | `FLUME_HERDR_WAKE_URL` | 未设置 | 仅对接外部 HTTP 唤醒器；当前 herdr 接线不需要 |
@@ -206,26 +207,22 @@ AI -> AI : 去重 · 订阅匹配 · 写 inbox
 == 唤醒 coordinator ==
 AI -> FL : POST /activation（四字段，不带正文）
 activate FL
-FL -> CO : herdr agent prompt sw-coordinator\n（只携带 newEntryCount）
+FL -> CO : herdr agent prompt sw-coordinator\n（agentId + newEntryCount + 固定 intake 指令）
 deactivate FL
 deactivate AI
 
-== 判断、进件、派工 ==
+== 读取、聚合、进件 ==
 activate CO
-CO -> CO : 查等待表 wake_condition
-alt 未命中
-  CO -> CO : 条目留待，不烧钱
-else 命中（过授权门）
-  CO -> AI : inbox read（取正文）
-  activate AI
-  AI --> CO : 事件内容
-  deactivate AI
-  CO -> BD : 建 board task + brief
-  CO -> AI : ack --through（进件即销账）
-end
+CO -> AI : inbox read（有界批次）
+activate AI
+AI --> CO : unacked entries
+deactivate AI
+CO -> CO : 按 project/resource 聚合
+CO -> BD : 只把可执行事件建/更新为 task
+CO -> AI : ack --through（只确认已审条目）
 deactivate CO
 
-BD -> WK : 派工（brief）
+BD -> WK : 按 board 设置派工（activation 不自动放行）
 activate WK
 WK -> WK : 执行 run（只读 brief）
 WK -> BD : 完成线 · 评审门 · 合并
@@ -233,7 +230,7 @@ deactivate WK
 
 note right of CO
   flume 只搬运和叫醒
-  read / 进件 / ack 归 coordinator
+  read / 聚合 / 进件 / ack 归 coordinator
   worker 的世界里只有 brief
 end note
 
@@ -241,7 +238,8 @@ end note
 ```
 
 这里只有 flume 是 launchd 的常驻入口；AgentInbox daemon 由 flume ensure，
-coordinator 属于 herdr-projects 的运行态。没有额外的 wake gate 服务。
+coordinator 属于 herdr-projects 的运行态。没有额外的 wake gate 服务。coordinator
+的 turn 是串行的：它正在处理别的请求时，activation 会排队到当前 turn 结束，不会丢。
 
 ## AgentInbox 与唤醒语义
 
@@ -263,14 +261,18 @@ flume 只接受上述四个字段。`newEntryCount == 0` 返回 `202 {"accepted"
 herdr agent prompt sw-coordinator "<固定唤醒文本>"
 ```
 
-prompt 只包含 `newEntryCount`。`latestEntryId` 和 `summary` 只用于日志，事件正文必须
-由 coordinator 回 AgentInbox `inbox read`，所以唤醒不等于授权。
+prompt 只包含配置中的 `agentId`、经过校验的 `newEntryCount` 和固定 intake 指令，
+不包含事件正文。`latestEntryId` 和 `summary` 只用于日志。coordinator 收到后用
+AgentInbox skill 读取 inbox、按 project/resource 聚合事件；对需要落地的工作按
+workflow-dsx 建或更新 board task，并只 ack 实际审过的条目；事件内容仍必须回
+AgentInbox 读取。建/更新 board task 是部署时的常设授权，coordinator 不需要再向人
+确认；派工、approve、merge 仍需要明确的人类指令。
 
 如果设置 `FLUME_HERDR_WAKE_AGENT=""` 并改用 `FLUME_HERDR_WAKE_URL`，flume 会向该
 URL POST 四个字段并带 `X-Flume-Activation-Mode: activation_only`。这是非 herdr
 唤醒器的兼容模式，不是当前部署路径。
 
-等待表合同：
+activation 兼容合同（旧 HTTP 唤醒器使用；当前 herdr 路径不依赖它）：
 
 ```json
 {

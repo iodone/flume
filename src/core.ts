@@ -35,6 +35,7 @@ export interface Config {
   secrets: Record<string, string>;
   wakeUrl?: string;
   wakeAgent?: string;
+  inboxAgent?: string;
   herdrBin?: string;
   wakeTimeoutMs?: number;
 }
@@ -75,6 +76,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
     ),
     wakeUrl: env.FLUME_HERDR_WAKE_URL?.trim() || undefined,
     wakeAgent: env.FLUME_HERDR_WAKE_AGENT?.trim() || undefined,
+    inboxAgent: env.FLUME_AGENTINBOX_AGENT_ID?.trim() || undefined,
     herdrBin: env.HERDR_BIN_PATH?.trim() || "herdr",
     wakeTimeoutMs: timeoutSeconds * 1_000,
   };
@@ -280,6 +282,7 @@ async function handleActivation(
         config.wakeAgent,
         activation,
         timeoutMs,
+        config.inboxAgent,
       );
     } else {
       await dispatchActivation(config.wakeUrl!, activation, timeoutMs);

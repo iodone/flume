@@ -252,6 +252,7 @@ test("calls herdr agent prompt directly when wakeAgent is configured", async () 
   const flume = createFlumeServer({
     ...CONFIG,
     wakeAgent: "sw-coordinator",
+    inboxAgent: "herdr-main",
     herdrBin,
     wakeTimeoutMs: 2_000,
   });
@@ -270,7 +271,14 @@ test("calls herdr agent prompt directly when wakeAgent is configured", async () 
     assert.deepEqual(response.body, { accepted: 1 });
     const args = await readFile(argsFile, "utf8");
     assert.match(args, /^agent\nprompt\nsw-coordinator\n/);
+    assert.match(args, /agentId=herdr-main/);
     assert.match(args, /newEntryCount=1/);
+    assert.match(args, /Process this activation now/);
+    assert.match(args, /standing authorization/);
+    assert.match(args, /herdr-projects tasks/);
+    assert.match(args, /follow workflow-dsx/);
+    assert.match(args, /never use `ack --all`/);
+    assert.doesNotMatch(args, /Reply exactly/);
   } finally {
     await close(flume);
     await rm(directory, { recursive: true, force: true });

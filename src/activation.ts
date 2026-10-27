@@ -176,11 +176,21 @@ export async function dispatchHerdrPrompt(
   agent: string,
   activation: Activation,
   timeoutMs: number = DEFAULT_WAKE_TIMEOUT_MS,
+  inboxAgent?: string,
 ): Promise<void> {
   const prompt = [
     "A flume activation arrived for AgentInbox.",
+    ...(inboxAgent ? [`agentId=${inboxAgent}`] : []),
     `newEntryCount=${activation.newEntryCount}`,
-    "Reply exactly `flume wake received` and stop. Do not modify files.",
+    "",
+    "Process this activation now:",
+    "- This is the configured AgentInbox intake path and a standing authorization from the deployment. Do not ask for confirmation before creating or updating board tasks from reviewed entries.",
+    "- Use the installed agentinbox skill. Read the unacked inbox in a bounded batch.",
+    "- Group related events by project/resource. Create or update herdr-projects tasks only for actionable work; ignore status-only noise.",
+    "- For any work that results, follow workflow-dsx.",
+    "- Do not delegate, approve, merge, or discard work without explicit human instruction.",
+    "- Ack only the entries you actually reviewed; never use `ack --all`.",
+    "- Reply with entries reviewed, tasks added/updated, entries acked, and anything ambiguous.",
   ].join("\n");
 
   await new Promise<void>((resolve, reject) => {

@@ -15,6 +15,8 @@ export FLUME_BIND="${FLUME_BIND:-0.0.0.0}"
 export FLUME_PORT="${FLUME_PORT:-19420}"
 # herdr-projects workspace 的 coordinator agent；不是 workspace 名。
 export FLUME_HERDR_WAKE_AGENT="${FLUME_HERDR_WAKE_AGENT-sw-coordinator}"
+# AgentInbox 中 coordinator 的 agent id；用于读取和确认 inbox。
+export FLUME_AGENTINBOX_AGENT_ID="${FLUME_AGENTINBOX_AGENT_ID:-herdr-main}"
 export HERDR_BIN_PATH="${HERDR_BIN_PATH:-/Users/mi/.local/bin/herdr}"
 export FLUME_HERDR_WAKE_TIMEOUT="${FLUME_HERDR_WAKE_TIMEOUT:-10}"
 

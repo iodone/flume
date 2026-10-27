@@ -36,14 +36,15 @@ flume                   校验四字段 · 调用唤醒器
 | 事件源（当前 GitLab） | 产生事件、按自身机制投递重试 | — |
 | flume | 接收、验签、归一、无状态喂入、唤醒转发、进程入口 | 队列、重试、去重、持久化、唤醒决策 |
 | 收件箱（当前 AgentInbox） | durable stream、native-id 去重、订阅过滤、inbox/ack、唤醒租约 | 业务判据 |
-| agent 侧（当前 herdr） | wait_condition、授权、开 turn、任务语义 | 事件接入细节 |
+| agent 侧（当前 herdr） | turn 队列、任务语义、是否建 board task | 事件接入细节 |
 
 ## 2. 三条红线
 
 1. **flume 零状态**：不在内存外存任何东西。重试、去重和持久化由 AgentInbox 承担。
    flume 挂掉会留下事件丢失窗口，这是为“永不长出第二份真相”付出的代价。
 2. **唤醒 ≠ 授权**：activation 只有四个唤醒字段，不携带正文。正文必须回
-   AgentInbox `inbox read`；是否开 turn 由 herdr coordinator 的等待表判断。
+   AgentInbox `inbox read`；是否处理、是否建 task 由 coordinator 按 AgentInbox
+   内容判断，flume 不携带授权。
 3. **抄拓扑不抄实现**：使用 AgentInbox 的 host/source/subscription 模型，但不复制
    它的实现；等待语义留在 herdr，而不塞进订阅过滤器。
 
@@ -55,9 +56,10 @@ flume                   校验四字段 · 调用唤醒器
 4. AgentInbox 落 durable stream，按 subscription 匹配 agent，写入 inbox entry。
 5. AgentInbox 向 flume `POST /activation`，只带 `kind/newEntryCount/latestEntryId/summary`。
 6. flume 校验字段，执行 `herdr agent prompt sw-coordinator`。
-7. `herdr-projects` coordinator 查等待表 `wake_condition`：
-   - 命中 → 过授权门 → `inbox read` 取正文 → 建 board task 和 brief → `ack --through` → 派工
-   - 未命中 → 条目留待，不烧钱
+7. `herdr-projects` coordinator 收到唤醒后：
+   - `inbox read` 取正文（有界批次）
+   - 按 project/resource 聚合事件，只把可执行事件建/更新为 board task
+   - `ack --through` 只确认已审过的条目
 
 前六步只做搬运和叫醒。`read / 进件 / ack` 三条动作归 coordinator；worker 只读
 brief，不知道 AgentInbox 存在。
@@ -74,9 +76,12 @@ brief，不知道 AgentInbox 存在。
 herdr agent prompt sw-coordinator "<固定唤醒文本>"
 ```
 
-prompt 只包含经过校验的 `newEntryCount`；`latestEntryId` 和 `summary` 留在 flume
-日志中。`entries` / `items` 等正文一旦出现在 activation payload 中，flume 直接返回
-400。
+prompt 只包含配置中的 `agentId`、经过校验的 `newEntryCount` 和固定 intake 指令；
+`latestEntryId` 和 `summary` 留在 flume 日志中。coordinator 用 AgentInbox skill
+读取 inbox、按 project/resource 聚合事件；对需要落地的工作按 workflow-dsx 建或
+更新 board task，并只 ack 实际审过的条目。建/更新 task 是部署时的常设授权；
+派工、approve、merge 仍需要明确的人类指令。
+`entries` / `items` 等正文一旦出现在 activation payload 中，flume 直接返回 400。
 
 `sw-coordinator` 是 `herdr-projects` workspace 的 coordinator agent 名，不是
 workspace 名。超时由 `FLUME_HERDR_WAKE_TIMEOUT` 控制。
@@ -109,7 +114,7 @@ X-Flume-Activation-Mode: activation_only
 | `latestEntryId` | `inbox read` 后执行 `ack --through <latestEntryId>` |
 | `summary` | 只用于显示与日志，不参与授权 |
 
-等待表合同：
+activation 兼容合同（旧 HTTP 唤醒器使用；当前 herdr 路径不依赖它）：
 
 ```json
 {
@@ -147,7 +152,8 @@ flume 内部唯一事件形状，adapter 负责把各家 payload 折成它：
 | `subject` | 人可读对象定位，例如 `group/project!123` |
 | `payload` | 供应商原始 JSON，不裁剪 |
 
-`native_id` 服务于收件箱去重，`event` 服务于订阅过滤，`subject` 服务于 herdr 等待表。
+`native_id` 服务于收件箱去重，`event` 服务于订阅过滤，`subject` 服务于 coordinator
+按项目/资源聚合。
 
 ## 5. 当前实现
 
@@ -278,5 +284,5 @@ AgentInbox 的 host/source/subscription 属于一次性控制面配置，由部�
 - 不做第二套投递（队列、重试、死信）——由 AgentInbox 负责。
 - 不做事件存储或回放——由 AgentInbox durable stream 负责。
 - 不做业务过滤——由 AgentInbox subscription 负责。
-- 不做唤醒策略（退避、租约、攒批）——由 AgentInbox 通知策略和 herdr 授权门负责。
+- 不做唤醒策略（退避、租约、攒批）——由 AgentInbox 通知策略和 herdr turn 调度负责。
 - 不 import AgentInbox 内部模块、不 fork、不融仓库。
