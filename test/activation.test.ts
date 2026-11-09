@@ -9,7 +9,8 @@ import test from "node:test";
 import {
   Activation,
   dispatchHerdrAssistant,
-  herdrWakePrompt,
+  dispatchWakeCli,
+  wakePrompt,
   KIND,
   WakeGateError,
   type ActivationPayload,
@@ -242,7 +243,7 @@ test("returns 503 when a wake is needed but no wake gate is configured", async (
   }
 });
 
-test("calls herdr agent prompt directly when wakeAgent is configured", async () => {
+test("supports a generic CLI command with agent arguments", async () => {
   const directory = await mkdtemp(join(tmpdir(), "flume-herdr-"));
   const argsFile = join(directory, "args.txt");
   const herdrBin = join(directory, "herdr");
@@ -254,10 +255,9 @@ test("calls herdr agent prompt directly when wakeAgent is configured", async () 
 
   const flume = createFlumeServer({
     ...CONFIG,
-    wakeAgent: "sw-coordinator",
+    wakeCli: `${herdrBin} agent prompt sw-coordinator`,
     inboxAgent: "herdr-main",
     intakeSkill: "/tmp/workflow-event-intake/SKILL.md",
-    herdrBin,
     wakeTimeoutMs: 2_000,
   });
   await listen(flume);
@@ -337,7 +337,7 @@ test("wakes only the live Assistant whose labels match the configured space", as
     assert.equal(sendArgs[1], "t-assistant");
     assert.equal(
       sendArgs.slice(2).join("\n"),
-      herdrWakePrompt(
+      wakePrompt(
         activation,
         "inbox-agent",
         "/tmp/workflow-event-intake/SKILL.md",
@@ -384,8 +384,10 @@ test("routes Assistant config through the activation handler and logs its target
   ]);
   const flume = createFlumeServer({
     ...CONFIG,
-    wakeAssistant: "space-1",
+    wakeCli: bin,
     hcBin: bin,
+    wakeSpace: "space-1",
+    wakeShepherdr: true,
     intakeSkill: "/tmp/SKILL.md",
   });
   const originalLog = console.log;
@@ -405,11 +407,35 @@ test("routes Assistant config through the activation handler and logs its target
     assert.equal(response.status, 202);
     assert.match(await readFile(sendFile, "utf8"), /^send\nt16\n/);
     assert.ok(logs.some((line) =>
-      line.includes("woke herdr assistant=t16 space=space-1")
+      line.includes("woke cli=hc assistant=t16 space=space-1")
     ));
   } finally {
     console.log = originalLog;
     await close(flume);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("passes the complete wake prompt to a generic CLI command", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "flume-cli-"));
+  const argsFile = join(directory, "args.txt");
+  const bin = join(directory, "notify");
+  await writeFile(bin, `#!/bin/sh\nprintf '%s\\n' "$@" > "${argsFile}"\n`, { mode: 0o755 });
+  const activation = new Activation(1, "entry-42", "1 new event");
+
+  try {
+    await dispatchWakeCli(
+      bin,
+      ["notify", "--target", "ops"],
+      activation,
+      2_000,
+      "inbox-agent",
+      "/tmp/SKILL.md",
+    );
+    const args = (await readFile(argsFile, "utf8")).trimEnd().split("\n");
+    assert.deepEqual(args.slice(0, 3), ["notify", "--target", "ops"]);
+    assert.equal(args.slice(3).join("\n"), wakePrompt(activation, "inbox-agent", "/tmp/SKILL.md"));
+  } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });

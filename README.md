@@ -143,36 +143,34 @@ $EDITOR .env
 | `FLUME_GITLAB_TOKEN` | 未设置 | 仅在启用 `gitlab` adapter 时需要 |
 | `FLUME_BIND` | `0.0.0.0` | 监听地址；只允许本机访问时改 `127.0.0.1` |
 | `FLUME_PORT` | `19420` | 监听端口；修改后 webhook URL 要同步修改 |
-| `FLUME_HERDR_WAKE_ASSISTANT` | 未设置 | Shepherdr 模式：唤醒该 space 当前的 Assistant；按终端 herdr 标签定位 |
-| `FLUME_HERDR_WAKE_AGENT` | 未设置 | 唤醒器使用的 coordinator agent 名；workspace 名独立配置 |
-| `FLUME_HERDR_WAKE_URL` | 未设置 | HTTP 模式：向外部 HTTP 唤醒器的 endpoint POST 激活字段 |
+| `FLUME_WAKE_URL` | 未设置 | URL 模式：向外部 HTTP endpoint POST 激活字段；设置后不使用 CLI |
+| `FLUME_WAKE_CLI` | `hc` | CLI 模式：命令接收完整 prompt；`hc` 走 Shepherdr Assistant，其他命令按空格拆分 |
+| `FLUME_WAKE_SPACE` | 未设置 | `hc` 要唤醒的 Shepherdr space；其他 CLI 不需要 |
 | `FLUME_AGENTINBOX_AGENT_ID` | 未设置 | coordinator 在 AgentInbox 中的 agent id，用于读取和确认 inbox |
-| `FLUME_AGENTINBOX_INTAKE_SKILL` | **Assistant / agent 模式必填** | 指向你自己配置过的 `SKILL.md`；flume 只传路径，由 agent 加载执行；缺失时拒绝启动 |
-| `FLUME_HERDR_HC_BIN` | `hc` | Assistant 模式使用的 Herdr CLI 可执行文件 |
-| `HERDR_BIN_PATH` | `herdr` | 旧版 agent 模式的唤醒器可执行文件路径 |
+| `FLUME_AGENTINBOX_INTAKE_SKILL` | **CLI 模式必填** | 指向你自己配置过的 `SKILL.md`；flume 只传路径，由 agent 加载执行；缺失时拒绝启动 |
 | `FLUME_HERDR_WAKE_TIMEOUT` | `10` | 唤醒命令超时，单位秒 |
 
 AgentInbox 的 source 和订阅由部署配置；flume 侧集中设置 `FLUME_ADAPTERS`、webhook secret 和 `FLUME_AGENTINBOX_INTAKE_SKILL`。
 
 ### 唤醒目标
 
-`FLUME_HERDR_WAKE_ASSISTANT`、`FLUME_HERDR_WAKE_AGENT`、`FLUME_HERDR_WAKE_URL`
-**三种目标只设一种**；同时设置多个会在启动时报错。未设置目标时，需要唤醒的 activation
-返回 503。
+通知 agent 只有 URL 和 CLI 两种配置模式，不绑定具体 agent 实现。设置
+`FLUME_WAKE_URL` 即选择 URL；否则使用 `FLUME_WAKE_CLI`（默认 `hc`）。两者同时显式设置
+会在启动时报错。
 
-- **Shepherdr Assistant（推荐）**：设置 `FLUME_HERDR_WAKE_ASSISTANT=<space id>`。flume
-  用 `FLUME_HERDR_HC_BIN` 执行 `hc ls --json`，只对 live 终端执行
+- **CLI（默认 Shepherdr）**：`FLUME_WAKE_CLI=hc` 且
+  `FLUME_WAKE_SPACE=<space id>`。flume 执行 `hc ls --json`，只对 live 终端执行
   `hc get <地址> --json`，选择 `herdr.role=coordinator` 且
   `herdr.coordinator.space` 或 `herdr.space` 等于配置值的终端，再用
   `hc send <地址> <prompt>` 投递。space id 可从 Assistant 的上述 labels 读取，或由
-  Shepherdr 提供；flume 不靠终端名猜 Assistant。
-- **旧版 coordinator agent**：设置 `FLUME_HERDR_WAKE_AGENT=<agent 名>`，保持原来的
-  `herdr agent prompt` 调用。
-- **HTTP 唤醒器**：设置 `FLUME_HERDR_WAKE_URL=<URL>`，POST 四字段并带
+  Shepherdr 提供。
+- **通用 CLI**：例如 `FLUME_WAKE_CLI=/path/to/notify --target ops`。命令按空格拆分，
+  完整唤醒 prompt 作为最后一个参数传入，可直接替换通知实现。
+- **URL**：设置 `FLUME_WAKE_URL=<URL>`，POST 四字段并带
   `X-Flume-Activation-Mode: activation_only`。
 
-Assistant 与旧版 agent 模式共用同一份唤醒文本，也都必须配置
-`FLUME_AGENTINBOX_INTAKE_SKILL`。每次 `hc` 调用都受 `FLUME_HERDR_WAKE_TIMEOUT` 约束。
+CLI 模式必须配置 `FLUME_AGENTINBOX_INTAKE_SKILL`。每次 CLI 调用都受
+`FLUME_HERDR_WAKE_TIMEOUT` 约束。
 
 ### GitHub webhook secret
 

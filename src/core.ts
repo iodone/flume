@@ -9,6 +9,7 @@ import {
   dispatchActivation,
   dispatchHerdrAssistant,
   dispatchHerdrPrompt,
+  dispatchWakeCli,
   WakeGateError,
 } from "./activation.js";
 import { getAdapter } from "./adapters/index.js";
@@ -36,8 +37,11 @@ export interface Config {
   adapters?: readonly string[];
   secrets: Record<string, string>;
   wakeUrl?: string;
+  wakeCli?: string;
   wakeAgent?: string;
   wakeAssistant?: string;
+  wakeSpace?: string;
+  wakeShepherdr?: boolean;
   inboxAgent?: string;
   intakeSkill?: string;
   herdrBin?: string;
@@ -83,18 +87,26 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
     throw new ConfigError("FLUME_HERDR_WAKE_TIMEOUT must be positive");
   }
 
+  const wakeUrl = (env.FLUME_WAKE_URL ?? env.FLUME_HERDR_WAKE_URL)?.trim() || undefined;
+  const wakeSpace = (env.FLUME_WAKE_SPACE ?? env.FLUME_HERDR_WAKE_ASSISTANT)?.trim() || undefined;
   const wakeAgent = env.FLUME_HERDR_WAKE_AGENT?.trim() || undefined;
-  const wakeAssistant = env.FLUME_HERDR_WAKE_ASSISTANT?.trim() || undefined;
-  const wakeUrl = env.FLUME_HERDR_WAKE_URL?.trim() || undefined;
+  const wakeShepherdr = wakeSpace !== undefined || env.FLUME_WAKE_CLI?.trim() === "hc";
+  const wakeCli = env.FLUME_WAKE_CLI?.trim() ||
+    (wakeSpace && !wakeUrl ? "hc" : undefined) ||
+    (wakeAgent && !wakeUrl ? "herdr" : undefined);
   const intakeSkill = env.FLUME_AGENTINBOX_INTAKE_SKILL?.trim() || undefined;
-  if ([wakeAgent, wakeAssistant, wakeUrl].filter(Boolean).length > 1) {
-    throw new ConfigError(
-      "set only one of FLUME_HERDR_WAKE_ASSISTANT, FLUME_HERDR_WAKE_AGENT, FLUME_HERDR_WAKE_URL",
-    );
+  if (wakeUrl && (env.FLUME_WAKE_CLI?.trim() || wakeSpace || wakeAgent)) {
+    throw new ConfigError("set only one of FLUME_WAKE_URL and FLUME_WAKE_CLI");
   }
-  if ((wakeAgent || wakeAssistant) && !intakeSkill) {
+  if (wakeSpace && env.FLUME_WAKE_CLI?.trim() && wakeCli !== "hc") {
+    throw new ConfigError("FLUME_WAKE_SPACE requires FLUME_WAKE_CLI=hc");
+  }
+  if (env.FLUME_WAKE_CLI?.trim() === "hc" && !wakeSpace) {
+    throw new ConfigError("FLUME_WAKE_SPACE is required when FLUME_WAKE_CLI=hc");
+  }
+  if (wakeCli && !intakeSkill) {
     throw new ConfigError(
-      "FLUME_AGENTINBOX_INTAKE_SKILL is required when FLUME_HERDR_WAKE_AGENT or FLUME_HERDR_WAKE_ASSISTANT is set",
+      "FLUME_AGENTINBOX_INTAKE_SKILL is required when FLUME_WAKE_CLI is set",
     );
   }
 
@@ -107,8 +119,11 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
       selected.map((adapter) => [adapter.NAME, env[adapter.SECRET_ENV]!]),
     ),
     wakeUrl,
+    wakeCli: wakeUrl ? undefined : wakeCli,
     wakeAgent,
-    wakeAssistant,
+    wakeAssistant: wakeSpace,
+    wakeSpace,
+    wakeShepherdr,
     inboxAgent: env.FLUME_AGENTINBOX_AGENT_ID?.trim() || undefined,
     intakeSkill,
     herdrBin: env.HERDR_BIN_PATH?.trim() || "herdr",
@@ -311,30 +326,42 @@ async function handleActivation(
     sendJson(response, 202, { accepted: 0 });
     return;
   }
-  if (!config.wakeAssistant && !config.wakeAgent && !config.wakeUrl) {
+  if (!config.wakeCli && !config.wakeUrl) {
     console.error(
-      "flume: activation rejected: FLUME_HERDR_WAKE_ASSISTANT, FLUME_HERDR_WAKE_AGENT, or FLUME_HERDR_WAKE_URL is not set",
+      "flume: activation rejected: FLUME_WAKE_CLI or FLUME_WAKE_URL is not set",
     );
     sendJson(response, 503, { error: "wake gate not configured" });
     return;
   }
 
-  let assistant: string | undefined;
+  let target = config.wakeUrl ? `url=${config.wakeUrl}` : `cli=${config.wakeCli}`;
   try {
     const timeoutMs = config.wakeTimeoutMs ?? DEFAULT_WAKE_TIMEOUT_MS;
-    if (config.wakeAssistant) {
-      assistant = await dispatchHerdrAssistant(
-        config.hcBin ?? "hc",
-        config.wakeAssistant,
+    if (config.wakeShepherdr && config.wakeCli) {
+      const address = await dispatchHerdrAssistant(
+        config.hcBin ?? (config.wakeCli === "hc" ? "hc" : config.wakeCli),
+        config.wakeSpace ?? "",
         activation,
         timeoutMs,
         config.inboxAgent,
         config.intakeSkill,
       );
+      target = `cli=hc assistant=${address} space=${config.wakeSpace ?? ""}`;
     } else if (config.wakeAgent) {
       await dispatchHerdrPrompt(
         config.herdrBin ?? "herdr",
         config.wakeAgent,
+        activation,
+        timeoutMs,
+        config.inboxAgent,
+        config.intakeSkill,
+      );
+      target = `cli=herdr agent=${config.wakeAgent}`;
+    } else if (config.wakeCli) {
+      const [bin, ...args] = config.wakeCli.split(/\s+/);
+      await dispatchWakeCli(
+        bin!,
+        args,
         activation,
         timeoutMs,
         config.inboxAgent,
@@ -350,13 +377,8 @@ async function handleActivation(
     return;
   }
 
-  const target = config.wakeAssistant
-    ? `assistant=${assistant} space=${config.wakeAssistant}`
-    : config.wakeAgent
-    ? `agent=${config.wakeAgent}`
-    : `url=${config.wakeUrl}`;
   console.log(
-    `flume: woke herdr ${target} newEntryCount=${activation.newEntryCount} latestEntryId=${activation.latestEntryId}`,
+    `flume: woke ${target} newEntryCount=${activation.newEntryCount} latestEntryId=${activation.latestEntryId}`,
   );
   sendJson(response, 202, { accepted: 1 });
 }

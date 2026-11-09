@@ -61,7 +61,7 @@ test("configFromEnv enables only the requested adapters", () => {
   );
 });
 
-test("configFromEnv accepts Assistant wake config and rejects conflicting targets", () => {
+test("configFromEnv uses hc for a Shepherdr space and rejects mixed wake modes", () => {
   const required = {
     AGENTINBOX_SOURCE_ID: "src-1",
     FLUME_GITHUB_SECRET: "gh-secret",
@@ -69,34 +69,25 @@ test("configFromEnv accepts Assistant wake config and rejects conflicting target
   };
   const config = configFromEnv({
     ...required,
-    FLUME_HERDR_WAKE_ASSISTANT: "space-1",
-    FLUME_HERDR_HC_BIN: "/opt/homebrew/bin/hc",
+    FLUME_WAKE_SPACE: "space-1",
   });
-  assert.equal(config.wakeAssistant, "space-1");
-  assert.equal(config.hcBin, "/opt/homebrew/bin/hc");
-
-  const targets = {
-    FLUME_HERDR_WAKE_ASSISTANT: "space-1",
-    FLUME_HERDR_WAKE_AGENT: "coordinator",
-    FLUME_HERDR_WAKE_URL: "http://127.0.0.1:5000/wake",
-  };
-  for (const first of Object.keys(targets)) {
-    for (const second of Object.keys(targets)) {
-      if (first === second) continue;
-      assert.throws(
-        () => configFromEnv({ ...required, [first]: targets[first as keyof typeof targets], [second]: targets[second as keyof typeof targets] }),
-        /set only one of/,
-      );
-    }
-  }
+  assert.equal(config.wakeCli, "hc");
+  assert.equal(config.wakeSpace, "space-1");
+  assert.equal(configFromEnv({ ...required, FLUME_WAKE_CLI: "/tmp/notify --target ops" }).wakeCli, "/tmp/notify --target ops");
+  assert.throws(
+    () => configFromEnv({ ...required, FLUME_WAKE_URL: "http://127.0.0.1:5000/wake", FLUME_WAKE_CLI: "hc" }),
+    /set only one of FLUME_WAKE_URL and FLUME_WAKE_CLI/,
+  );
+  assert.throws(() => configFromEnv({ ...required, FLUME_WAKE_CLI: "hc" }), /FLUME_WAKE_SPACE/);
 });
 
-test("configFromEnv requires an intake skill for Assistant wake", () => {
+test("configFromEnv requires an intake skill for CLI wake", () => {
   assert.throws(
     () => configFromEnv({
       AGENTINBOX_SOURCE_ID: "src-1",
       FLUME_GITHUB_SECRET: "gh-secret",
-      FLUME_HERDR_WAKE_ASSISTANT: "space-1",
+      FLUME_WAKE_CLI: "hc",
+      FLUME_WAKE_SPACE: "space-1",
     }),
     /FLUME_AGENTINBOX_INTAKE_SKILL/,
   );

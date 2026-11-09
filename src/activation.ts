@@ -171,7 +171,7 @@ export async function dispatchActivation(
   await response.body?.cancel().catch(() => undefined);
 }
 
-export function herdrWakePrompt(
+export function wakePrompt(
   activation: Activation,
   inboxAgent?: string,
   intakeSkill?: string,
@@ -193,6 +193,33 @@ export function herdrWakePrompt(
   ].join("\n");
 }
 
+export async function dispatchWakeCli(
+  bin: string,
+  args: string[],
+  activation: Activation,
+  timeoutMs: number = DEFAULT_WAKE_TIMEOUT_MS,
+  inboxAgent?: string,
+  intakeSkill?: string,
+): Promise<void> {
+  const prompt = wakePrompt(activation, inboxAgent, intakeSkill);
+  await new Promise<void>((resolve, reject) => {
+    execFile(
+      bin,
+      [...args, prompt],
+      { timeout: timeoutMs, maxBuffer: 1024 * 1024 },
+      (error, _stdout, stderr) => {
+        if (error) {
+          const detail = stderr.trim().replace(/\s+/g, " ").slice(0, 500) ||
+            error.message;
+          reject(new WakeGateError(`wake CLI failed: ${detail}`));
+          return;
+        }
+        resolve();
+      },
+    );
+  });
+}
+
 export async function dispatchHerdrPrompt(
   bin: string,
   agent: string,
@@ -201,22 +228,7 @@ export async function dispatchHerdrPrompt(
   inboxAgent?: string,
   intakeSkill?: string,
 ): Promise<void> {
-  const prompt = herdrWakePrompt(activation, inboxAgent, intakeSkill);
-
-  await new Promise<void>((resolve, reject) => {
-    execFile(
-      bin,
-      ["agent", "prompt", agent, prompt],
-      { timeout: timeoutMs, maxBuffer: 1024 * 1024 },
-      (error) => {
-        if (error) {
-          reject(new WakeGateError(`herdr prompt failed: ${error.message}`));
-          return;
-        }
-        resolve();
-      },
-    );
-  });
+  await dispatchWakeCli(bin, ["agent", "prompt", agent], activation, timeoutMs, inboxAgent, intakeSkill);
 }
 
 interface HcTerminal {
@@ -276,7 +288,7 @@ export async function dispatchHerdrAssistant(
       (labels["herdr.coordinator.space"] === spaceId ||
         labels["herdr.space"] === spaceId)
     ) {
-      const prompt = herdrWakePrompt(activation, inboxAgent, intakeSkill);
+      const prompt = wakePrompt(activation, inboxAgent, intakeSkill);
       await runHc(bin, ["send", candidate.address, prompt], timeoutMs);
       return candidate.address;
     }
