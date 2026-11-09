@@ -40,7 +40,7 @@ flume 是零状态事件转运层：**验签 → 归一成统一 envelope → �
 2. flume 用 `X-Hub-Signature-256` 验签，归一成 `{source:"github", event:"pull_request.opened", subject:"owner/repo#42", payload:{...}}`。
 3. flume 调用 AgentInbox source event 接口；AgentInbox 按 `X-GitHub-Delivery` 去重、匹配 subscription、写入 inbox entry。
 4. AgentInbox 向 flume `POST /activation`，只带 `kind/newEntryCount/latestEntryId/summary`；正文留在 AgentInbox。
-5. flume 校验字段后执行唤醒命令；prompt 只带 `agentId`、`newEntryCount` 和 intake skill 路径，PR 正文由 coordinator 从 inbox 读取。
+5. flume 校验字段后执行唤醒命令；prompt 只带 `agentId`、`newEntryCount` 和固定指令（按名字指名 `workflow-event-intake`），PR 正文由 coordinator 从 inbox 读取。
 6. coordinator 醒来后读取 inbox，按 `envelope.source` 加载 `sources/github.md`。
 7. source policy 把事件映射成 `REVIEW_REQUEST`：PR 作者不是你，你是 requested reviewer 或 assignee，且不是 draft。
 8. coordinator 在任务系统建 review task；brief 包含 PR URL、head sha、author、base branch、entry id、dedupe key，并指定项目自己的 `review` playbook。
@@ -76,10 +76,8 @@ $EDITOR .env
 | `FLUME_WAKE_URL` | 未设置 | URL 模式：向外部 HTTP endpoint POST 激活字段；设置后不使用 exec |
 | `FLUME_WAKE_EXEC` | 未设置 | exec 模式：执行任意脚本，完整 prompt 作为最后参数；Shepherdr 写 `hc space <id>` |
 | `FLUME_AGENTINBOX_AGENT_ID` | 未设置 | coordinator 在 AgentInbox 中的 agent id，用于读取和确认 inbox |
-| `FLUME_AGENTINBOX_INTAKE_SKILL` | **exec 模式必填** | 指向你自己配置过的 `SKILL.md`；flume 只传路径，由 agent 加载执行；缺失时拒绝启动 |
-| `FLUME_WAKE_TIMEOUT` | `10` | 唤醒命令超时，单位秒 |
 
-AgentInbox 的 source 和订阅由部署配置；flume 侧集中设置 `FLUME_ADAPTERS`、webhook secret 和 `FLUME_AGENTINBOX_INTAKE_SKILL`。
+AgentInbox 的 source 和订阅由部署配置；flume 侧集中设置 `FLUME_ADAPTERS`、webhook secret 和唤醒目标。
 
 ### 通知 agent：URL / exec 二选一
 
@@ -89,14 +87,12 @@ shell。例如自定义脚本：
 
 ```bash
 FLUME_WAKE_EXEC="/path/to/notify --target ops"
-FLUME_AGENTINBOX_INTAKE_SKILL=/absolute/path/to/SKILL.md
 ```
 
 Shepherdr 的一个 exec 示例：
 
 ```bash
 FLUME_WAKE_EXEC="hc space <space-id>"
-FLUME_AGENTINBOX_INTAKE_SKILL=/absolute/path/to/SKILL.md
 ```
 
 `.env` 中值含空格必须带引号；`space` 是 flume 的 Assistant 发现约定，不是 `hc` 子命令。
@@ -160,7 +156,8 @@ flume 验签使用 `X-Hub-Signature-256`，并以 `X-GitHub-Delivery` 作为 `na
 
 ### agent intake skill
 
-intake skill 由 agent workspace 提供。复制模板并按你的任务系统配置，然后用 `FLUME_AGENTINBOX_INTAKE_SKILL` 指向复制后的 `SKILL.md`。
+intake skill 由 agent workspace 提供，flume 不配置路径：唤醒 prompt 指名
+`workflow-event-intake`，agent 在自己的 `.agents/skills/` 下按名字加载。
 
 1. 复制模板到 agent workspace：
 
@@ -169,9 +166,8 @@ intake skill 由 agent workspace 提供。复制模板并按你的任务系统�
      /path/to/your-agent/.agents/skills/
    ```
 
-2. 编辑 `sources/github.md`，填 `GITHUB_LOGIN`、`TASK_CLI`、`TASK_REPO`、`TASK_PREFIX`、`REVIEW_WORKSPACE`，并按你的任务系统调整命令。
-3. 设置 `FLUME_AGENTINBOX_INTAKE_SKILL` 指向复制后的 `SKILL.md`。
-4. 重启 flume，让新路径进入 activation prompt。
+2. 编辑 `sources/<source>.md`，按你的任务系统填命令和映射。
+3. 确认 skill 名字仍是 `workflow-event-intake`（prompt 按名字找它）。
 
 skill 的职责：
 
@@ -206,7 +202,6 @@ GitLab 是第二个 adapter 示例：
 ```bash
 FLUME_ADAPTERS=gitlab \
 FLUME_GITLAB_TOKEN='<token>' \
-FLUME_AGENTINBOX_INTAKE_SKILL=/path/to/your-agent/.agents/skills/workflow-event-intake/SKILL.md \
 ./run-flume.sh
 ```
 
@@ -313,7 +308,7 @@ AgentInbox 写 inbox 后向 flume `/activation` 发送：
 
 flume 只接受上述四个字段。`newEntryCount == 0` 返回 `202 {"accepted":0}`；大于 `0` 时执行唤醒命令。
 
-prompt 只包含配置中的 `agentId`、经过校验的 `newEntryCount`、`latestEntryId`、intake skill 路径和固定指令；事件正文由 coordinator 从 inbox 读取。`summary` 只用于日志。coordinator 收到后用 AgentInbox skill 读取 inbox，并读取 `FLUME_AGENTINBOX_INTAKE_SKILL` 指向的策略文件。
+prompt 只包含配置中的 `agentId`、经过校验的 `newEntryCount`、`latestEntryId` 和固定指令；事件正文由 coordinator 从 inbox 读取。`summary` 只用于日志。coordinator 收到后用 AgentInbox skill 读取 inbox，并加载名为 `workflow-event-intake` 的策略 skill。
 
 如果设置 `FLUME_WAKE_URL`，flume 会向该 URL POST 四个字段并带 `X-Flume-Activation-Mode: activation_only`。URL 与 exec 互斥；`hc space <id>` 会让目标 space 当前的 live Assistant 收到 prompt。
 
@@ -353,7 +348,6 @@ adapter 只验签和折 envelope；排队、重试、落盘、订阅过滤和唤
 | 现象 | 检查 |
 | :--- | :--- |
 | 启动提示 Keychain 读取失败 | 确认 `service=flume-github-webhook account=flume` 存在且非空；或直接设置 `FLUME_GITHUB_SECRET` |
-| 启动提示 intake skill 不存在 | 检查 `FLUME_AGENTINBOX_INTAKE_SKILL` 是否是复制后的 `SKILL.md` 绝对路径 |
 | `healthz` 不通 | 看 `logs/flume.launchd.err.log`；确认 `FLUME_PORT` 和进程是否启动 |
 | GitHub 显示 `Connection refused` | 确认 `FLUME_BIND=0.0.0.0`、端口一致、主机防火墙和路由可达 |
 | GitHub Delivery 超时 | 确认 GitHub 到 flume 主机的路由可达；Webhook URL 使用 flume 主机地址 |

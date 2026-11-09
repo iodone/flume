@@ -53,7 +53,7 @@ flume 把接入、可靠性和业务判断拆开：
 2. flume 用 `X-Hub-Signature-256` 验签，归一成 `{source:"github", event:"pull_request.opened", subject:"owner/repo#42"}`。
 3. flume 写入 AgentInbox；AgentInbox 按 `X-GitHub-Delivery` 去重、匹配订阅、写 inbox。
 4. AgentInbox 调 flume `/activation`，只带 `newEntryCount` 等唤醒字段。
-5. flume 执行唤醒命令，prompt 带 intake skill 路径；PR 正文留在 AgentInbox，由 coordinator 读取。
+5. flume 执行唤醒命令，prompt 带 `agentId` 与 `newEntryCount` 并指名 `workflow-event-intake` skill；PR 正文留在 AgentInbox，由 coordinator 读取。
 6. coordinator 读 inbox，加载 `sources/github.md`，映射成 `REVIEW_REQUEST`。
 7. coordinator 在任务系统建 review task；brief 里写 PR URL、head sha、author，并指定走项目自己的 `review` playbook。
 8. review worker 建 worktree、按项目流程分析代码、写 review 文档；按授权决定是否发 review comment，approve / request changes / merge 由人类决定。
@@ -90,7 +90,7 @@ AI -> AI : 去重 · 订阅匹配 · 写 inbox
 == 唤醒 coordinator ==
 AI -> FL : POST /activation（四字段，正文留在 inbox）
 activate FL
-FL -> CO : 唤醒命令\n（agentId + newEntryCount + intakeSkill）
+FL -> CO : 唤醒命令\n（agentId + newEntryCount）
 deactivate FL
 deactivate AI
 
@@ -146,10 +146,8 @@ $EDITOR .env
 | `FLUME_WAKE_URL` | 未设置 | URL 模式：向外部 HTTP endpoint POST 激活字段；设置后不使用 exec |
 | `FLUME_WAKE_EXEC` | 未设置 | exec 模式：执行任意脚本，完整 prompt 作为最后参数；Shepherdr 写 `hc space <id>` |
 | `FLUME_AGENTINBOX_AGENT_ID` | 未设置 | coordinator 在 AgentInbox 中的 agent id，用于读取和确认 inbox |
-| `FLUME_AGENTINBOX_INTAKE_SKILL` | **exec 模式必填** | 指向你自己配置过的 `SKILL.md`；flume 只传路径，由 agent 加载执行；缺失时拒绝启动 |
-| `FLUME_WAKE_TIMEOUT` | `10` | 唤醒命令超时，单位秒 |
 
-AgentInbox 的 source 和订阅由部署配置；flume 侧集中设置 `FLUME_ADAPTERS`、webhook secret 和 `FLUME_AGENTINBOX_INTAKE_SKILL`。
+AgentInbox 的 source 和订阅由部署配置；flume 侧集中设置 `FLUME_ADAPTERS`、webhook secret 和唤醒目标。
 
 ### 唤醒目标
 
@@ -159,15 +157,15 @@ prompt 作为参数，不是 stdio：不会向 stdin 写内容。参数按空格
 
 - **exec / 任意脚本**：例如 `FLUME_WAKE_EXEC="/path/to/notify --target ops"`。命令按空格拆分，
   完整唤醒 prompt 作为最后一个参数传入，可直接替换通知实现。
-- **exec / Shepherdr 示例**：`FLUME_WAKE_EXEC="hc space <space id>"` 会让 flume 查找该
+- **exec / Shepherdr 示例**：`FLUME_WAKE_EXEC="hc space <space-id>"` 会让 flume 查找该
   space 的 live Assistant 并发送 prompt。space id 可从 `hc get <Assistant> --json`
   返回的 `herdr.coordinator.space` 或 `herdr.space` 标签读取，或由 Shepherdr 提供。
   `space` 是 flume 的约定，不是 `hc` 子命令；只有可执行文件名精确为 `hc` 时启用。
 - **URL**：设置 `FLUME_WAKE_URL=<URL>`，POST 四字段并带
   `X-Flume-Activation-Mode: activation_only`。
 
-exec 模式必须配置 `FLUME_AGENTINBOX_INTAKE_SKILL`。每次 exec 调用都受
-`FLUME_WAKE_TIMEOUT` 约束。
+唤醒 prompt 固定写明按 `workflow-event-intake` skill 处理，skill 由 agent 在自己的
+workspace 中按名字查找；每次唤醒有 10 秒上限。
 
 ### GitHub webhook secret
 
@@ -208,7 +206,8 @@ flume 验签使用 `X-Hub-Signature-256`，并以 `X-GitHub-Delivery` 作为 `na
 
 ### agent intake skill
 
-intake skill 由 agent workspace 提供。复制模板并按你的任务系统配置，然后用 `FLUME_AGENTINBOX_INTAKE_SKILL` 指向复制后的 `SKILL.md`。
+intake skill 由 agent workspace 提供，flume 不配置路径：唤醒 prompt 指名
+`workflow-event-intake`，agent 在自己的 `.agents/skills/` 下按名字加载。
 
 1. 复制模板到 agent workspace：
 
@@ -217,9 +216,8 @@ intake skill 由 agent workspace 提供。复制模板并按你的任务系统�
      /path/to/your-agent/.agents/skills/
    ```
 
-2. 编辑 `sources/github.md`，填 `GITHUB_LOGIN`、`TASK_CLI`、`TASK_REPO`、`TASK_PREFIX`、`REVIEW_WORKSPACE`，并按你的任务系统调整命令。
-3. 设置 `FLUME_AGENTINBOX_INTAKE_SKILL` 指向复制后的 `SKILL.md`。
-4. 重启 flume，让新路径进入 activation prompt。
+2. 编辑 `sources/<source>.md`，按你的任务系统填命令和映射。
+3. 确认 skill 名字仍是 `workflow-event-intake`（prompt 按名字找它）。
 
 skill 的职责：
 
