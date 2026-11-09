@@ -89,7 +89,7 @@ AgentInbox 细节留在 coordinator。
 inbox entry id 由 AgentInbox 生成：source event 写入后，AgentInbox 通过 activation
 带上 `newEntryCount` 和 `latestEntryId`。flume 等这次写入完成后唤醒 agent。
 
-通知 agent 有 URL / CLI 两种互斥模式，默认 CLI 为 Shepherdr 的 `hc`：
+通知 agent 有 URL / exec 两种互斥模式。exec 执行任意脚本并传 prompt 参数，不是 stdio：
 
 ```text
 hc ls --json → hc get <live-address> --json → hc send <assistant-address> "<固定唤醒文本>"
@@ -99,8 +99,8 @@ POST <wake-url> "<activation_only 四字段>"
 
 Shepherdr Assistant 是第一种路径。flume 只检查 live 终端的标签，选择
 `herdr.role=coordinator` 且 `herdr.coordinator.space` 或 `herdr.space` 等于
-`FLUME_WAKE_SPACE` 的终端。每次 `hc` 调用都有独立超时；非零退出、找不到目标
-都会成为 wake-gate 错误。显式同时配置 URL 与 CLI 会在启动时报错。
+`FLUME_WAKE_EXEC='hc space <space-id>'` 的终端。每次 `hc` 调用都有独立超时；非零退出、找不到目标
+都会成为 wake-gate 错误。同时配置 URL 与 exec 会在启动时报错。
 
 prompt 只包含配置中的 `agentId`、经过校验的 `newEntryCount`、intake skill 路径和
 固定指令；`latestEntryId` 进入 prompt 和日志，`summary` 留在 flume 日志中。flume 把 skill 路径交给
@@ -129,9 +129,9 @@ flume 仓库提供 `templates/workflow-event-intake/` 作为起点。复制到 a
 `FLUME_AGENTINBOX_INTAKE_SKILL` 指向复制后的 `SKILL.md`。activation payload 出现
 `entries` / `items` 等正文时，flume 返回 400。
 
-`FLUME_WAKE_CLI`（默认 `hc`）配置 CLI；其他命令按空格拆分并接收最后一个 prompt 参数。
-`FLUME_WAKE_SPACE` 只用于 `hc` 的 Assistant 发现。超时由 `FLUME_HERDR_WAKE_TIMEOUT`
-控制，CLI 模式要求 `FLUME_AGENTINBOX_INTAKE_SKILL`。
+`FLUME_WAKE_EXEC` 配置可执行文件和参数，其他脚本同样按空格拆分并接收最后一个 prompt
+参数，不经过 shell。超时由 `FLUME_HERDR_WAKE_TIMEOUT` 控制，exec 模式要求
+`FLUME_AGENTINBOX_INTAKE_SKILL`。
 
 ### 5.1 HTTP 唤醒兼容模式
 
@@ -239,10 +239,10 @@ CLI 使用默认 feed；嵌入 `createFlumeServer` 时可以注入别的 feed。
 | :--- | :--- | :--- | :--- |
 | 事件源 | `src/adapters/index.ts` 的 `Adapter` | 实现 `NAME` / `SECRET_ENV` / `verify` / `normalize`，加入 `ADAPTERS` 和 `FLUME_ADAPTERS` | `github`、`gitlab`；路由为 `/NAME` |
 | 收件箱 | `src/core.ts` 的 `FeedFunction`，默认 `src/feed.ts` | 嵌入时注入 `feedFn`；换 CLI 默认还要改入口和配置 | AgentInbox |
-| 唤醒器 | `src/activation.ts` 的 `dispatchHerdrPrompt` / `dispatchActivation` | 改 `activation.ts`；外部 HTTP 唤醒器可先用 URL 模式 | herdr；`dispatchHerdrPrompt` 直连 |
+| 唤醒器 | `src/activation.ts` 的 `dispatchWakeExec` / `dispatchActivation` | 任意脚本用 exec 模式；外部 HTTP 唤醒器用 URL 模式 | Shepherdr `hc space <id>`；任意可执行脚本 |
 
 事件源使用 `Adapter` 接口；收件箱通过 `FeedFunction` 注入；唤醒器通过
-`dispatchHerdrPrompt` 或 HTTP 模式接入。三个接缝按当前接口扩展。
+`dispatchWakeExec` 或 HTTP 模式接入。三个接缝按当前接口扩展。
 
 ### 7.4 实现边界
 

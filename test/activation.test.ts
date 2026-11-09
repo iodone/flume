@@ -9,7 +9,7 @@ import test from "node:test";
 import {
   Activation,
   dispatchHerdrAssistant,
-  dispatchWakeCli,
+  dispatchWakeExec,
   wakePrompt,
   KIND,
   WakeGateError,
@@ -255,7 +255,7 @@ test("supports a generic CLI command with agent arguments", async () => {
 
   const flume = createFlumeServer({
     ...CONFIG,
-    wakeCli: `${herdrBin} agent prompt sw-coordinator`,
+    wakeExec: `${herdrBin} agent prompt sw-coordinator`,
     inboxAgent: "herdr-main",
     intakeSkill: "/tmp/workflow-event-intake/SKILL.md",
     wakeTimeoutMs: 2_000,
@@ -384,10 +384,7 @@ test("routes Assistant config through the activation handler and logs its target
   ]);
   const flume = createFlumeServer({
     ...CONFIG,
-    wakeCli: bin,
-    hcBin: bin,
-    wakeSpace: "space-1",
-    wakeShepherdr: true,
+    wakeExec: `${bin} space space-1`,
     intakeSkill: "/tmp/SKILL.md",
   });
   const originalLog = console.log;
@@ -407,7 +404,7 @@ test("routes Assistant config through the activation handler and logs its target
     assert.equal(response.status, 202);
     assert.match(await readFile(sendFile, "utf8"), /^send\nt16\n/);
     assert.ok(logs.some((line) =>
-      line.includes("woke cli=hc assistant=t16 space=space-1")
+      line.includes("woke exec=hc assistant=t16 space=space-1")
     ));
   } finally {
     console.log = originalLog;
@@ -424,7 +421,7 @@ test("passes the complete wake prompt to a generic CLI command", async () => {
   const activation = new Activation(1, "entry-42", "1 new event");
 
   try {
-    await dispatchWakeCli(
+    await dispatchWakeExec(
       bin,
       ["notify", "--target", "ops"],
       activation,

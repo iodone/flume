@@ -61,7 +61,7 @@ test("configFromEnv enables only the requested adapters", () => {
   );
 });
 
-test("configFromEnv uses hc for a Shepherdr space and rejects mixed wake modes", () => {
+test("configFromEnv accepts exec commands and rejects mixed wake modes", () => {
   const required = {
     AGENTINBOX_SOURCE_ID: "src-1",
     FLUME_GITHUB_SECRET: "gh-secret",
@@ -69,25 +69,23 @@ test("configFromEnv uses hc for a Shepherdr space and rejects mixed wake modes",
   };
   const config = configFromEnv({
     ...required,
-    FLUME_WAKE_SPACE: "space-1",
+    FLUME_WAKE_EXEC: "hc space space-1",
   });
-  assert.equal(config.wakeCli, "hc");
-  assert.equal(config.wakeSpace, "space-1");
-  assert.equal(configFromEnv({ ...required, FLUME_WAKE_CLI: "/tmp/notify --target ops" }).wakeCli, "/tmp/notify --target ops");
+  assert.equal(config.wakeExec, "hc space space-1");
+  assert.equal(configFromEnv({ ...required, FLUME_WAKE_EXEC: "/tmp/notify --target ops" }).wakeExec, "/tmp/notify --target ops");
   assert.throws(
-    () => configFromEnv({ ...required, FLUME_WAKE_URL: "http://127.0.0.1:5000/wake", FLUME_WAKE_CLI: "hc" }),
-    /set only one of FLUME_WAKE_URL and FLUME_WAKE_CLI/,
+    () => configFromEnv({ ...required, FLUME_WAKE_URL: "http://127.0.0.1:5000/wake", FLUME_WAKE_EXEC: "hc space space-1" }),
+    /set only one of FLUME_WAKE_URL and FLUME_WAKE_EXEC/,
   );
-  assert.throws(() => configFromEnv({ ...required, FLUME_WAKE_CLI: "hc" }), /FLUME_WAKE_SPACE/);
+  assert.throws(() => configFromEnv({ ...required, FLUME_WAKE_EXEC: "hc" }), /hc space <space-id>/);
 });
 
-test("configFromEnv requires an intake skill for CLI wake", () => {
+test("configFromEnv requires an intake skill for exec wake", () => {
   assert.throws(
     () => configFromEnv({
       AGENTINBOX_SOURCE_ID: "src-1",
       FLUME_GITHUB_SECRET: "gh-secret",
-      FLUME_WAKE_CLI: "hc",
-      FLUME_WAKE_SPACE: "space-1",
+      FLUME_WAKE_EXEC: "hc space space-1",
     }),
     /FLUME_AGENTINBOX_INTAKE_SKILL/,
   );

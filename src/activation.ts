@@ -193,7 +193,7 @@ export function wakePrompt(
   ].join("\n");
 }
 
-export async function dispatchWakeCli(
+export async function dispatchWakeExec(
   bin: string,
   args: string[],
   activation: Activation,
@@ -211,24 +211,13 @@ export async function dispatchWakeCli(
         if (error) {
           const detail = stderr.trim().replace(/\s+/g, " ").slice(0, 500) ||
             error.message;
-          reject(new WakeGateError(`wake CLI failed: ${detail}`));
+          reject(new WakeGateError(`wake exec failed: ${detail}`));
           return;
         }
         resolve();
       },
     );
   });
-}
-
-export async function dispatchHerdrPrompt(
-  bin: string,
-  agent: string,
-  activation: Activation,
-  timeoutMs: number = DEFAULT_WAKE_TIMEOUT_MS,
-  inboxAgent?: string,
-  intakeSkill?: string,
-): Promise<void> {
-  await dispatchWakeCli(bin, ["agent", "prompt", agent], activation, timeoutMs, inboxAgent, intakeSkill);
 }
 
 interface HcTerminal {

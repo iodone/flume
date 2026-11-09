@@ -8,8 +8,7 @@ import {
   DEFAULT_WAKE_TIMEOUT_MS,
   dispatchActivation,
   dispatchHerdrAssistant,
-  dispatchHerdrPrompt,
-  dispatchWakeCli,
+  dispatchWakeExec,
   WakeGateError,
 } from "./activation.js";
 import { getAdapter } from "./adapters/index.js";
@@ -37,15 +36,9 @@ export interface Config {
   adapters?: readonly string[];
   secrets: Record<string, string>;
   wakeUrl?: string;
-  wakeCli?: string;
-  wakeAgent?: string;
-  wakeAssistant?: string;
-  wakeSpace?: string;
-  wakeShepherdr?: boolean;
+  wakeExec?: string;
   inboxAgent?: string;
   intakeSkill?: string;
-  herdrBin?: string;
-  hcBin?: string;
   wakeTimeoutMs?: number;
 }
 
@@ -87,26 +80,18 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
     throw new ConfigError("FLUME_HERDR_WAKE_TIMEOUT must be positive");
   }
 
-  const wakeUrl = (env.FLUME_WAKE_URL ?? env.FLUME_HERDR_WAKE_URL)?.trim() || undefined;
-  const wakeSpace = (env.FLUME_WAKE_SPACE ?? env.FLUME_HERDR_WAKE_ASSISTANT)?.trim() || undefined;
-  const wakeAgent = env.FLUME_HERDR_WAKE_AGENT?.trim() || undefined;
-  const wakeShepherdr = wakeSpace !== undefined || env.FLUME_WAKE_CLI?.trim() === "hc";
-  const wakeCli = env.FLUME_WAKE_CLI?.trim() ||
-    (wakeSpace && !wakeUrl ? "hc" : undefined) ||
-    (wakeAgent && !wakeUrl ? "herdr" : undefined);
+  const wakeUrl = env.FLUME_WAKE_URL?.trim() || undefined;
+  const wakeExec = env.FLUME_WAKE_EXEC?.trim() || undefined;
   const intakeSkill = env.FLUME_AGENTINBOX_INTAKE_SKILL?.trim() || undefined;
-  if (wakeUrl && (env.FLUME_WAKE_CLI?.trim() || wakeSpace || wakeAgent)) {
-    throw new ConfigError("set only one of FLUME_WAKE_URL and FLUME_WAKE_CLI");
+  if (wakeUrl && wakeExec) {
+    throw new ConfigError("set only one of FLUME_WAKE_URL and FLUME_WAKE_EXEC");
   }
-  if (wakeSpace && env.FLUME_WAKE_CLI?.trim() && wakeCli !== "hc") {
-    throw new ConfigError("FLUME_WAKE_SPACE requires FLUME_WAKE_CLI=hc");
+  if (wakeExec === "hc" || wakeExec === "hc space") {
+    throw new ConfigError("FLUME_WAKE_EXEC hc requires a space: hc space <space-id>");
   }
-  if (env.FLUME_WAKE_CLI?.trim() === "hc" && !wakeSpace) {
-    throw new ConfigError("FLUME_WAKE_SPACE is required when FLUME_WAKE_CLI=hc");
-  }
-  if (wakeCli && !intakeSkill) {
+  if (wakeExec && !intakeSkill) {
     throw new ConfigError(
-      "FLUME_AGENTINBOX_INTAKE_SKILL is required when FLUME_WAKE_CLI is set",
+      "FLUME_AGENTINBOX_INTAKE_SKILL is required when FLUME_WAKE_EXEC is set",
     );
   }
 
@@ -119,15 +104,9 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
       selected.map((adapter) => [adapter.NAME, env[adapter.SECRET_ENV]!]),
     ),
     wakeUrl,
-    wakeCli: wakeUrl ? undefined : wakeCli,
-    wakeAgent,
-    wakeAssistant: wakeSpace,
-    wakeSpace,
-    wakeShepherdr,
+    wakeExec,
     inboxAgent: env.FLUME_AGENTINBOX_AGENT_ID?.trim() || undefined,
     intakeSkill,
-    herdrBin: env.HERDR_BIN_PATH?.trim() || "herdr",
-    hcBin: env.FLUME_HERDR_HC_BIN?.trim() || "hc",
     wakeTimeoutMs: timeoutSeconds * 1_000,
   };
 }
@@ -326,41 +305,31 @@ async function handleActivation(
     sendJson(response, 202, { accepted: 0 });
     return;
   }
-  if (!config.wakeCli && !config.wakeUrl) {
+  if (!config.wakeExec && !config.wakeUrl) {
     console.error(
-      "flume: activation rejected: FLUME_WAKE_CLI or FLUME_WAKE_URL is not set",
+      "flume: activation rejected: FLUME_WAKE_EXEC or FLUME_WAKE_URL is not set",
     );
     sendJson(response, 503, { error: "wake gate not configured" });
     return;
   }
 
-  let target = config.wakeUrl ? `url=${config.wakeUrl}` : `cli=${config.wakeCli}`;
+  let target = config.wakeUrl ? `url=${config.wakeUrl}` : `exec=${config.wakeExec}`;
   try {
     const timeoutMs = config.wakeTimeoutMs ?? DEFAULT_WAKE_TIMEOUT_MS;
-    if (config.wakeShepherdr && config.wakeCli) {
+    const [bin, ...args] = config.wakeExec?.split(/\s+/) ?? [];
+    if (bin?.endsWith("hc") && args[0] === "space" && args.length === 2) {
       const address = await dispatchHerdrAssistant(
-        config.hcBin ?? (config.wakeCli === "hc" ? "hc" : config.wakeCli),
-        config.wakeSpace ?? "",
+        bin,
+        args[1]!,
         activation,
         timeoutMs,
         config.inboxAgent,
         config.intakeSkill,
       );
-      target = `cli=hc assistant=${address} space=${config.wakeSpace ?? ""}`;
-    } else if (config.wakeAgent) {
-      await dispatchHerdrPrompt(
-        config.herdrBin ?? "herdr",
-        config.wakeAgent,
-        activation,
-        timeoutMs,
-        config.inboxAgent,
-        config.intakeSkill,
-      );
-      target = `cli=herdr agent=${config.wakeAgent}`;
-    } else if (config.wakeCli) {
-      const [bin, ...args] = config.wakeCli.split(/\s+/);
-      await dispatchWakeCli(
-        bin!,
+      target = `exec=hc assistant=${address} space=${args[1]}`;
+    } else if (bin) {
+      await dispatchWakeExec(
+        bin,
         args,
         activation,
         timeoutMs,
