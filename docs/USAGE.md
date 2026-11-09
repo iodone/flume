@@ -2,14 +2,14 @@
 
 flume 是零状态事件转运层：**验签 → 归一成统一 envelope → 喂进收件箱 → 转发唤醒**。
 
-核心是 **flume + AgentInbox**：flume 负责接入和搬运，AgentInbox 负责去重、持久化、订阅、inbox 和 activation。事件源和唤醒器可替换；GitHub 和 herdr 是当前示例。
+核心是 **flume + AgentInbox**：flume 负责接入和搬运，AgentInbox 负责去重、持久化、订阅、inbox 和 activation。事件源和唤醒器可替换；文档以 GitHub 事件和通用唤醒脚本为例。
 
 ## 1. 快速安装
 
 ### 前置条件
 
 - Node.js `^22.23.4 || ^24.22.1 || >=26.12.1`
-- 一个可用的唤醒目标；当前示例是 herdr
+- 一个 URL 或可执行脚本唤醒目标
 - 能访问 flume 监听地址的事件源；当前示例是 GitHub
 
 依赖和构建由 [`run-flume.sh`](../run-flume.sh) 在首次启动时自动完成。
@@ -77,7 +77,7 @@ $EDITOR .env
 | `FLUME_WAKE_EXEC` | 未设置 | exec 模式：执行任意脚本，完整 prompt 作为最后参数；Shepherdr 写 `hc space <id>` |
 | `FLUME_AGENTINBOX_AGENT_ID` | 未设置 | coordinator 在 AgentInbox 中的 agent id，用于读取和确认 inbox |
 | `FLUME_AGENTINBOX_INTAKE_SKILL` | **exec 模式必填** | 指向你自己配置过的 `SKILL.md`；flume 只传路径，由 agent 加载执行；缺失时拒绝启动 |
-| `FLUME_HERDR_WAKE_TIMEOUT` | `10` | 唤醒命令超时，单位秒 |
+| `FLUME_WAKE_TIMEOUT` | `10` | 唤醒命令超时，单位秒 |
 
 AgentInbox 的 source 和订阅由部署配置；flume 侧集中设置 `FLUME_ADAPTERS`、webhook secret 和 `FLUME_AGENTINBOX_INTAKE_SKILL`。
 
@@ -85,23 +85,27 @@ AgentInbox 的 source 和订阅由部署配置；flume 侧集中设置 `FLUME_AD
 
 `FLUME_WAKE_URL` 与 `FLUME_WAKE_EXEC` 同时设置会在启动时报错。exec 不是 stdio：
 它执行任意脚本，把完整 prompt 作为最后一个参数，不写 stdin。参数按空格拆分，不经过
-shell；Shepherdr 的 space 也合并在这一条配置里：
+shell。例如自定义脚本：
 
-Shepherdr 下设置：
+```bash
+FLUME_WAKE_EXEC='/path/to/notify --target ops'
+FLUME_AGENTINBOX_INTAKE_SKILL=/absolute/path/to/SKILL.md
+```
+
+Shepherdr 的一个 exec 示例：
 
 ```bash
 FLUME_WAKE_EXEC=hc space <space-id>
 FLUME_AGENTINBOX_INTAKE_SKILL=/absolute/path/to/SKILL.md
 ```
 
-space id 可从 `hc get <Assistant> --json` 返回的
+该示例中，space id 可从 `hc get <Assistant> --json` 返回的
 `labels["herdr.coordinator.space"]` 或 `labels["herdr.space"]` 读取，也可由 Shepherdr
 提供。flume 每次唤醒都重新列出 live 终端、读取标签，只向匹配的 Assistant 执行
 `hc send`，不依赖终端地址固定不变。找不到 Assistant 或 `hc` 失败时 activation 返回
 502；没有设置任何唤醒目标时返回 503。
 
-任意脚本可写成 `FLUME_WAKE_EXEC='/path/to/notify --target ops'`；flume 按空格拆分命令，
-并把完整 prompt 作为最后一个参数。URL 模式 POST 四字段和 `activation_only` 请求头。
+URL 模式 POST 四字段和 `activation_only` 请求头。
 
 例如临时换端口：
 

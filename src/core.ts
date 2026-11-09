@@ -74,10 +74,10 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
     throw new ConfigError("FLUME_PORT must be an integer from 0 to 65535");
   }
 
-  const timeoutText = env.FLUME_HERDR_WAKE_TIMEOUT || "5";
+  const timeoutText = env.FLUME_WAKE_TIMEOUT || "5";
   const timeoutSeconds = Number(timeoutText);
   if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
-    throw new ConfigError("FLUME_HERDR_WAKE_TIMEOUT must be positive");
+    throw new ConfigError("FLUME_WAKE_TIMEOUT must be positive");
   }
 
   const wakeUrl = env.FLUME_WAKE_URL?.trim() || undefined;

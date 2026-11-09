@@ -3,7 +3,7 @@
 > 定位：零状态事件转运层——**验签 → 归一成统一 envelope → 喂进 agent 收件箱 →
 > 转发唤醒**。flume = 渡槽：只负责把水从这头运到那头。
 
-核心是 **flume + AgentInbox**。事件源和唤醒器是可替换角色；GitHub 和 herdr 是当前示例。
+核心是 **flume + AgentInbox**。事件源和唤醒器是可替换角色；事件源示例为 GitHub，唤醒使用 URL 或 exec。
 
 ## 0. 问题
 
@@ -25,10 +25,10 @@ flume 把这些事件翻译成一层薄桥：可靠性语义交给 AgentInbox，
 | flume | 核心 | 验签、归一、无状态喂入、唤醒转发、进程入口 |
 | AgentInbox | 核心 | 去重、持久化、订阅匹配、inbox/ack、activation |
 | 事件源 | 可替换 | 产生事件并按自身机制投递；当前示例是 GitHub |
-| 唤醒器 | 可替换 | 把 activation 变成一次 agent turn；当前示例是 herdr |
+| 唤醒器 | 可替换 | 把 activation 变成一次 agent turn；通过 URL 或 exec 投递 |
 | agent 侧 | 部署决定 | 读 inbox、决定是否建 task、按自己的 playbook 执行 |
 
-GitHub 和 herdr 是当前示例；adapter 和唤醒器都按部署替换，核心处理链路不变。
+adapter 和唤醒器都按部署替换，核心处理链路不变。
 
 ## 2. 分层与所有权
 
@@ -92,15 +92,18 @@ inbox entry id 由 AgentInbox 生成：source event 写入后，AgentInbox 通�
 通知 agent 有 URL / exec 两种互斥模式。exec 执行任意脚本并传 prompt 参数，不是 stdio：
 
 ```text
-hc ls --json → hc get <live-address> --json → hc send <assistant-address> "<固定唤醒文本>"
-<custom-cli> [args...] "<固定唤醒文本>"
+<custom-exec> [args...] "<固定唤醒文本>"
 POST <wake-url> "<activation_only 四字段>"
 ```
 
-Shepherdr Assistant 是第一种路径。flume 只检查 live 终端的标签，选择
-`herdr.role=coordinator` 且 `herdr.coordinator.space` 或 `herdr.space` 等于
-`FLUME_WAKE_EXEC='hc space <space-id>'` 的终端。每次 `hc` 调用都有独立超时；非零退出、找不到目标
-都会成为 wake-gate 错误。同时配置 URL 与 exec 会在启动时报错。
+`FLUME_WAKE_EXEC` 配置可执行文件和参数。flume 按空格拆分后直接执行，不经过 shell，
+完整 prompt 是最后一个参数，不写 stdin。exec 模式要求
+`FLUME_AGENTINBOX_INTAKE_SKILL`，每次执行都受 `FLUME_WAKE_TIMEOUT` 约束。
+同时配置 URL 与 exec 会在启动时报错。
+
+`hc space <space-id>` 是一个 exec 示例：flume 执行 `hc ls --json`，对 live 终端执行
+`hc get <live-address> --json`，按 herdr 标签找到目标 space 的 Assistant，再执行
+`hc send <assistant-address> <prompt>`。这并不限制其他 exec 脚本的实现。
 
 prompt 只包含配置中的 `agentId`、经过校验的 `newEntryCount`、intake skill 路径和
 固定指令；`latestEntryId` 进入 prompt 和日志，`summary` 留在 flume 日志中。flume 把 skill 路径交给
@@ -129,11 +132,7 @@ flume 仓库提供 `templates/workflow-event-intake/` 作为起点。复制到 a
 `FLUME_AGENTINBOX_INTAKE_SKILL` 指向复制后的 `SKILL.md`。activation payload 出现
 `entries` / `items` 等正文时，flume 返回 400。
 
-`FLUME_WAKE_EXEC` 配置可执行文件和参数，其他脚本同样按空格拆分并接收最后一个 prompt
-参数，不经过 shell。超时由 `FLUME_HERDR_WAKE_TIMEOUT` 控制，exec 模式要求
-`FLUME_AGENTINBOX_INTAKE_SKILL`。
-
-### 5.1 HTTP 唤醒兼容模式
+### 5.1 URL 唤醒模式
 
 如果设置了 `FLUME_WAKE_URL`，flume 会
 POST 四字段并带 `X-Flume-Activation-Mode: activation_only`：
@@ -151,8 +150,7 @@ X-Flume-Activation-Mode: activation_only
 }
 ```
 
-这是外部 HTTP 唤醒器的兼容接口；herdr 示例走命令唤醒。两种模式都只尝试一次，
-失败交给 AgentInbox 重试。
+两种模式都只尝试一次，失败交给 AgentInbox 重试。
 
 | activation 字段 | agent 侧语义 |
 | :--- | :--- |
@@ -291,7 +289,7 @@ adapter 负责验签和折 envelope；排队、重试、落盘、过滤和唤醒
 1. adapter 纯函数：payload → envelope，重点 `native_id` 和事件命名。
 2. HTTP 门面：mock feed，断言 202 与喂入参数。
 3. 错误路径：400 / 401 / 413 / 502。
-4. activation：直接唤醒命令、HTTP 兼容模式、四字段合同和正文拒收。
+4. activation：exec 唤醒、URL 唤醒、四字段合同和正文拒收。
 
 ## 10. 职责边界
 
