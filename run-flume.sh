@@ -27,14 +27,16 @@ export FLUME_ADAPTERS="${FLUME_ADAPTERS:-github}"
 export AGENTINBOX_SOURCE_ID="${AGENTINBOX_SOURCE_ID:-}"
 export FLUME_BIND="${FLUME_BIND:-0.0.0.0}"
 export FLUME_PORT="${FLUME_PORT:-19420}"
-# 唤醒目标使用的 coordinator agent 名。
-export FLUME_HERDR_WAKE_AGENT="${FLUME_HERDR_WAKE_AGENT:-}"
+# URL 与 exec 二选一。exec 直接执行任意脚本，完整 prompt 作为最后一个参数。
+# Shepherdr 用 hc space <space-id>；脚本参数按空格拆分，不经过 shell。
+export FLUME_WAKE_URL="${FLUME_WAKE_URL:-}"
+export FLUME_WAKE_EXEC="${FLUME_WAKE_EXEC:-}"
 # AgentInbox 中 coordinator 的 agent id；用于读取和确认 inbox。
 export FLUME_AGENTINBOX_AGENT_ID="${FLUME_AGENTINBOX_AGENT_ID:-}"
 # agent 侧的 event intake 策略；flume 只把路径传给唤醒 prompt，不执行它。
 # 没有内置默认值。复制 templates/workflow-event-intake/ 并把这里指向你的 SKILL.md。
-export HERDR_BIN_PATH="${HERDR_BIN_PATH:-herdr}"
-export FLUME_HERDR_WAKE_TIMEOUT="${FLUME_HERDR_WAKE_TIMEOUT:-10}"
+export FLUME_AGENTINBOX_INTAKE_SKILL="${FLUME_AGENTINBOX_INTAKE_SKILL:-}"
+export FLUME_WAKE_TIMEOUT="${FLUME_WAKE_TIMEOUT:-10}"
 
 if [[ -z "${FLUME_AGENTINBOX_INTAKE_SKILL:-}" ]]; then
   echo "flume: FLUME_AGENTINBOX_INTAKE_SKILL is required; copy templates/workflow-event-intake/ and point it at your SKILL.md" >&2

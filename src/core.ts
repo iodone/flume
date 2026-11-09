@@ -1,13 +1,15 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import path from "node:path";
 
 import {
   Activation,
   ActivationError,
   DEFAULT_WAKE_TIMEOUT_MS,
   dispatchActivation,
-  dispatchHerdrPrompt,
+  dispatchHerdrAssistant,
+  dispatchWakeExec,
   WakeGateError,
 } from "./activation.js";
 import { getAdapter } from "./adapters/index.js";
@@ -35,10 +37,9 @@ export interface Config {
   adapters?: readonly string[];
   secrets: Record<string, string>;
   wakeUrl?: string;
-  wakeAgent?: string;
+  wakeExec?: string;
   inboxAgent?: string;
   intakeSkill?: string;
-  herdrBin?: string;
   wakeTimeoutMs?: number;
 }
 
@@ -74,17 +75,24 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
     throw new ConfigError("FLUME_PORT must be an integer from 0 to 65535");
   }
 
-  const timeoutText = env.FLUME_HERDR_WAKE_TIMEOUT || "5";
+  const timeoutText = env.FLUME_WAKE_TIMEOUT || "5";
   const timeoutSeconds = Number(timeoutText);
   if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
-    throw new ConfigError("FLUME_HERDR_WAKE_TIMEOUT must be positive");
+    throw new ConfigError("FLUME_WAKE_TIMEOUT must be positive");
   }
 
-  const wakeAgent = env.FLUME_HERDR_WAKE_AGENT?.trim() || undefined;
+  const wakeUrl = env.FLUME_WAKE_URL?.trim() || undefined;
+  const wakeExec = env.FLUME_WAKE_EXEC?.trim() || undefined;
   const intakeSkill = env.FLUME_AGENTINBOX_INTAKE_SKILL?.trim() || undefined;
-  if (wakeAgent && !intakeSkill) {
+  if (wakeUrl && wakeExec) {
+    throw new ConfigError("set only one of FLUME_WAKE_URL and FLUME_WAKE_EXEC");
+  }
+  if (wakeExec === "hc" || wakeExec === "hc space") {
+    throw new ConfigError("FLUME_WAKE_EXEC hc requires a space: hc space <space-id>");
+  }
+  if (wakeExec && !intakeSkill) {
     throw new ConfigError(
-      "FLUME_AGENTINBOX_INTAKE_SKILL is required when FLUME_HERDR_WAKE_AGENT is set",
+      "FLUME_AGENTINBOX_INTAKE_SKILL is required when FLUME_WAKE_EXEC is set",
     );
   }
 
@@ -96,11 +104,10 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
     secrets: Object.fromEntries(
       selected.map((adapter) => [adapter.NAME, env[adapter.SECRET_ENV]!]),
     ),
-    wakeUrl: env.FLUME_HERDR_WAKE_URL?.trim() || undefined,
-    wakeAgent,
+    wakeUrl,
+    wakeExec,
     inboxAgent: env.FLUME_AGENTINBOX_AGENT_ID?.trim() || undefined,
     intakeSkill,
-    herdrBin: env.HERDR_BIN_PATH?.trim() || "herdr",
     wakeTimeoutMs: timeoutSeconds * 1_000,
   };
 }
@@ -299,20 +306,32 @@ async function handleActivation(
     sendJson(response, 202, { accepted: 0 });
     return;
   }
-  if (!config.wakeAgent && !config.wakeUrl) {
+  if (!config.wakeExec && !config.wakeUrl) {
     console.error(
-      "flume: activation rejected: FLUME_HERDR_WAKE_AGENT or FLUME_HERDR_WAKE_URL is not set",
+      "flume: activation rejected: FLUME_WAKE_EXEC or FLUME_WAKE_URL is not set",
     );
     sendJson(response, 503, { error: "wake gate not configured" });
     return;
   }
 
+  let target = config.wakeUrl ? `url=${config.wakeUrl}` : `exec=${config.wakeExec}`;
   try {
     const timeoutMs = config.wakeTimeoutMs ?? DEFAULT_WAKE_TIMEOUT_MS;
-    if (config.wakeAgent) {
-      await dispatchHerdrPrompt(
-        config.herdrBin ?? "herdr",
-        config.wakeAgent,
+    const [bin, ...args] = config.wakeExec?.split(/\s+/) ?? [];
+    if (bin && path.basename(bin) === "hc" && args[0] === "space" && args.length === 2) {
+      const address = await dispatchHerdrAssistant(
+        bin,
+        args[1]!,
+        activation,
+        timeoutMs,
+        config.inboxAgent,
+        config.intakeSkill,
+      );
+      target = `exec=hc assistant=${address} space=${args[1]}`;
+    } else if (bin) {
+      await dispatchWakeExec(
+        bin,
+        args,
         activation,
         timeoutMs,
         config.inboxAgent,
@@ -328,11 +347,8 @@ async function handleActivation(
     return;
   }
 
-  const target = config.wakeAgent
-    ? `agent=${config.wakeAgent}`
-    : `url=${config.wakeUrl}`;
   console.log(
-    `flume: woke herdr ${target} newEntryCount=${activation.newEntryCount} latestEntryId=${activation.latestEntryId}`,
+    `flume: woke ${target} newEntryCount=${activation.newEntryCount} latestEntryId=${activation.latestEntryId}`,
   );
   sendJson(response, 202, { accepted: 1 });
 }

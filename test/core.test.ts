@@ -61,6 +61,36 @@ test("configFromEnv enables only the requested adapters", () => {
   );
 });
 
+test("configFromEnv accepts exec commands and rejects mixed wake modes", () => {
+  const required = {
+    AGENTINBOX_SOURCE_ID: "src-1",
+    FLUME_GITHUB_SECRET: "gh-secret",
+    FLUME_AGENTINBOX_INTAKE_SKILL: "/tmp/SKILL.md",
+  };
+  const config = configFromEnv({
+    ...required,
+    FLUME_WAKE_EXEC: "hc space space-1",
+  });
+  assert.equal(config.wakeExec, "hc space space-1");
+  assert.equal(configFromEnv({ ...required, FLUME_WAKE_EXEC: "/tmp/notify --target ops" }).wakeExec, "/tmp/notify --target ops");
+  assert.throws(
+    () => configFromEnv({ ...required, FLUME_WAKE_URL: "http://127.0.0.1:5000/wake", FLUME_WAKE_EXEC: "hc space space-1" }),
+    /set only one of FLUME_WAKE_URL and FLUME_WAKE_EXEC/,
+  );
+  assert.throws(() => configFromEnv({ ...required, FLUME_WAKE_EXEC: "hc" }), /hc space <space-id>/);
+});
+
+test("configFromEnv requires an intake skill for exec wake", () => {
+  assert.throws(
+    () => configFromEnv({
+      AGENTINBOX_SOURCE_ID: "src-1",
+      FLUME_GITHUB_SECRET: "gh-secret",
+      FLUME_WAKE_EXEC: "hc space space-1",
+    }),
+    /FLUME_AGENTINBOX_INTAKE_SKILL/,
+  );
+});
+
 interface Response {
   status: number;
   body: Record<string, unknown>;

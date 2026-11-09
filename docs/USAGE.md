@@ -2,14 +2,14 @@
 
 flume 是零状态事件转运层：**验签 → 归一成统一 envelope → 喂进收件箱 → 转发唤醒**。
 
-核心是 **flume + AgentInbox**：flume 负责接入和搬运，AgentInbox 负责去重、持久化、订阅、inbox 和 activation。事件源和唤醒器可替换；GitHub 和 herdr 是当前示例。
+核心是 **flume + AgentInbox**：flume 负责接入和搬运，AgentInbox 负责去重、持久化、订阅、inbox 和 activation。事件源和唤醒器可替换；文档以 GitHub 事件和通用唤醒脚本为例。
 
 ## 1. 快速安装
 
 ### 前置条件
 
 - Node.js `^22.23.4 || ^24.22.1 || >=26.12.1`
-- 一个可用的唤醒目标；当前示例是 herdr
+- 一个 URL 或可执行脚本唤醒目标
 - 能访问 flume 监听地址的事件源；当前示例是 GitHub
 
 依赖和构建由 [`run-flume.sh`](../run-flume.sh) 在首次启动时自动完成。
@@ -73,14 +73,42 @@ $EDITOR .env
 | `FLUME_GITLAB_TOKEN` | 未设置 | 仅在启用 `gitlab` adapter 时需要 |
 | `FLUME_BIND` | `0.0.0.0` | 监听地址；只允许本机访问时改 `127.0.0.1` |
 | `FLUME_PORT` | `19420` | 监听端口；修改后 webhook URL 要同步修改 |
-| `FLUME_HERDR_WAKE_AGENT` | 未设置 | 唤醒器使用的 coordinator agent 名；workspace 名独立配置 |
+| `FLUME_WAKE_URL` | 未设置 | URL 模式：向外部 HTTP endpoint POST 激活字段；设置后不使用 exec |
+| `FLUME_WAKE_EXEC` | 未设置 | exec 模式：执行任意脚本，完整 prompt 作为最后参数；Shepherdr 写 `hc space <id>` |
 | `FLUME_AGENTINBOX_AGENT_ID` | 未设置 | coordinator 在 AgentInbox 中的 agent id，用于读取和确认 inbox |
-| `FLUME_AGENTINBOX_INTAKE_SKILL` | **必填** | 指向你自己配置过的 `SKILL.md`；flume 只传路径，由 agent 加载执行；缺失时拒绝启动 |
-| `HERDR_BIN_PATH` | `herdr` | 当前 herdr 示例的唤醒器可执行文件路径 |
-| `FLUME_HERDR_WAKE_TIMEOUT` | `10` | 唤醒命令超时，单位秒 |
-| `FLUME_HERDR_WAKE_URL` | 未设置 | 外部 HTTP 唤醒器的 endpoint；herdr 示例走命令唤醒 |
+| `FLUME_AGENTINBOX_INTAKE_SKILL` | **exec 模式必填** | 指向你自己配置过的 `SKILL.md`；flume 只传路径，由 agent 加载执行；缺失时拒绝启动 |
+| `FLUME_WAKE_TIMEOUT` | `10` | 唤醒命令超时，单位秒 |
 
 AgentInbox 的 source 和订阅由部署配置；flume 侧集中设置 `FLUME_ADAPTERS`、webhook secret 和 `FLUME_AGENTINBOX_INTAKE_SKILL`。
+
+### 通知 agent：URL / exec 二选一
+
+`FLUME_WAKE_URL` 与 `FLUME_WAKE_EXEC` 同时设置会在启动时报错。exec 不是 stdio：
+它执行任意脚本，把完整 prompt 作为最后一个参数，不写 stdin。参数按空格拆分，不经过
+shell。例如自定义脚本：
+
+```bash
+FLUME_WAKE_EXEC="/path/to/notify --target ops"
+FLUME_AGENTINBOX_INTAKE_SKILL=/absolute/path/to/SKILL.md
+```
+
+Shepherdr 的一个 exec 示例：
+
+```bash
+FLUME_WAKE_EXEC="hc space <space-id>"
+FLUME_AGENTINBOX_INTAKE_SKILL=/absolute/path/to/SKILL.md
+```
+
+`.env` 中值含空格必须带引号；`space` 是 flume 的 Assistant 发现约定，不是 `hc` 子命令。
+只有可执行文件名精确为 `hc` 时使用该约定，其他脚本仍按普通 exec 调用。
+
+该示例中，space id 可从 `hc get <Assistant> --json` 返回的
+`labels["herdr.coordinator.space"]` 或 `labels["herdr.space"]` 读取，也可由 Shepherdr
+提供。flume 每次唤醒都重新列出 live 终端、读取标签，只向匹配的 Assistant 执行
+`hc send`，不依赖终端地址固定不变。找不到 Assistant 或 `hc` 失败时 activation 返回
+502；没有设置任何唤醒目标时返回 503。
+
+URL 模式 POST 四字段和 `activation_only` 请求头。
 
 例如临时换端口：
 
@@ -285,9 +313,9 @@ AgentInbox 写 inbox 后向 flume `/activation` 发送：
 
 flume 只接受上述四个字段。`newEntryCount == 0` 返回 `202 {"accepted":0}`；大于 `0` 时执行唤醒命令。
 
-prompt 只包含配置中的 `agentId`、经过校验的 `newEntryCount`、intake skill 路径和固定指令；事件正文由 coordinator 从 inbox 读取。`latestEntryId` 和 `summary` 只用于日志。coordinator 收到后用 AgentInbox skill 读取 inbox，并读取 `FLUME_AGENTINBOX_INTAKE_SKILL` 指向的策略文件。
+prompt 只包含配置中的 `agentId`、经过校验的 `newEntryCount`、`latestEntryId`、intake skill 路径和固定指令；事件正文由 coordinator 从 inbox 读取。`summary` 只用于日志。coordinator 收到后用 AgentInbox skill 读取 inbox，并读取 `FLUME_AGENTINBOX_INTAKE_SKILL` 指向的策略文件。
 
-如果设置 `FLUME_HERDR_WAKE_AGENT=""` 并改用 `FLUME_HERDR_WAKE_URL`，flume 会向该 URL POST 四个字段并带 `X-Flume-Activation-Mode: activation_only`。这是外部 HTTP 唤醒器的兼容模式；herdr 示例走命令唤醒。
+如果设置 `FLUME_WAKE_URL`，flume 会向该 URL POST 四个字段并带 `X-Flume-Activation-Mode: activation_only`。URL 与 exec 互斥；`hc space <id>` 会让目标 space 当前的 live Assistant 收到 prompt。
 
 ## 7. Adapters
 
@@ -331,9 +359,9 @@ adapter 只验签和折 envelope；排队、重试、落盘、订阅过滤和唤
 | GitHub Delivery 超时 | 确认 GitHub 到 flume 主机的路由可达；Webhook URL 使用 flume 主机地址 |
 | `401 {"error":"invalid token"}` | GitHub Webhook Secret 与 Keychain 中的值不一致 |
 | `502 {"error":"feed failed"}` | `AGENTINBOX_SOURCE_ID` 不存在或 AgentInbox 拒收 |
-| `502 {"error":"wake gate failed"}` | 唤醒命令失败；检查 agent 名、`HERDR_BIN_PATH` 和超时 |
+| `502 {"error":"wake gate failed"}` | 唤醒命令失败；检查 `FLUME_WAKE_EXEC` 和超时 |
 | 返回 `202` 但 inbox 为空 | AgentInbox source 没有订阅到目标 agent |
-| inbox 有条目但 agent 没醒 | 检查 `FLUME_HERDR_WAKE_AGENT`、唤醒器可执行文件和 `/activation` 日志 |
+| inbox 有条目但 agent 没醒 | 检查 `FLUME_WAKE_EXEC` 和 `/activation` 日志 |
 | 请求返回 `413 {"error":"body too large"}` | webhook body 超过 8 MiB |
 
 验证时使用 GitHub 的 Redeliver 或真实 PR 事件，覆盖从 webhook 到 inbox 的完整链路。

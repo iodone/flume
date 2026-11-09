@@ -2,7 +2,7 @@
 
 零状态事件转运层：把外部系统的事件**验签 → 归一成统一 envelope → 喂进收件箱 → 转发唤醒**。命名自渡槽：只负责把水从这头运到那头。
 
-核心是 **flume + AgentInbox**：flume 负责接入和搬运，AgentInbox 负责去重、持久化、订阅、inbox 和 activation。事件源和唤醒器都可替换；文档以 GitHub 和 herdr 作为当前示例。
+核心是 **flume + AgentInbox**：flume 负责接入和搬运，AgentInbox 负责去重、持久化、订阅、inbox 和 activation。事件源和唤醒器都可替换；文档以 GitHub 事件和通用唤醒脚本为例。
 
 [使用指南 → docs/USAGE.md](docs/USAGE.md) · [架构 → docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · [Adapter 与扩展 → docs/ADAPTERS.md](docs/ADAPTERS.md) · [卸载 → docs/REMOVAL.md](docs/REMOVAL.md)
 
@@ -19,13 +19,13 @@ flume 把接入、可靠性和业务判断拆开：
 - **flume 只负责接入**：验签、归一、写入收件箱、转发唤醒。
 - **AgentInbox 负责可靠性**：去重、持久化、订阅匹配、inbox/ack、activation 租约。
 - **agent 侧负责判断**：读 inbox、决定是否建 task、怎么执行。
-- **事件源和唤醒器可替换**：GitHub 和 herdr 是当前示例；adapter 和唤醒目标按部署选择。
+- **事件源和唤醒器可替换**：adapter、URL 或唤醒脚本按部署选择。
 
 队列、重试、持久化和业务过滤由 AgentInbox 承担，是否开 turn 由 agent 侧判断。
 
 ## 快速安装
 
-需要 Node.js `^22.23.4 || ^24.22.1 || >=26.12.1`，以及一个可用的唤醒目标。当前示例是 herdr。
+需要 Node.js `^22.23.4 || ^24.22.1 || >=26.12.1`，以及一个 URL 或可执行脚本唤醒目标。
 
 依赖和构建由 [`run-flume.sh`](run-flume.sh) 在首次启动时自动完成。
 
@@ -143,14 +143,31 @@ $EDITOR .env
 | `FLUME_GITLAB_TOKEN` | 未设置 | 仅在启用 `gitlab` adapter 时需要 |
 | `FLUME_BIND` | `0.0.0.0` | 监听地址；只允许本机访问时改 `127.0.0.1` |
 | `FLUME_PORT` | `19420` | 监听端口；修改后 webhook URL 要同步修改 |
-| `FLUME_HERDR_WAKE_AGENT` | 未设置 | 唤醒器使用的 coordinator agent 名；workspace 名独立配置 |
+| `FLUME_WAKE_URL` | 未设置 | URL 模式：向外部 HTTP endpoint POST 激活字段；设置后不使用 exec |
+| `FLUME_WAKE_EXEC` | 未设置 | exec 模式：执行任意脚本，完整 prompt 作为最后参数；Shepherdr 写 `hc space <id>` |
 | `FLUME_AGENTINBOX_AGENT_ID` | 未设置 | coordinator 在 AgentInbox 中的 agent id，用于读取和确认 inbox |
-| `FLUME_AGENTINBOX_INTAKE_SKILL` | **必填** | 指向你自己配置过的 `SKILL.md`；flume 只传路径，由 agent 加载执行；缺失时拒绝启动 |
-| `HERDR_BIN_PATH` | `herdr` | 当前 herdr 示例的唤醒器可执行文件路径 |
-| `FLUME_HERDR_WAKE_TIMEOUT` | `10` | 唤醒命令超时，单位秒 |
-| `FLUME_HERDR_WAKE_URL` | 未设置 | 外部 HTTP 唤醒器的 endpoint；herdr 示例走命令唤醒 |
+| `FLUME_AGENTINBOX_INTAKE_SKILL` | **exec 模式必填** | 指向你自己配置过的 `SKILL.md`；flume 只传路径，由 agent 加载执行；缺失时拒绝启动 |
+| `FLUME_WAKE_TIMEOUT` | `10` | 唤醒命令超时，单位秒 |
 
 AgentInbox 的 source 和订阅由部署配置；flume 侧集中设置 `FLUME_ADAPTERS`、webhook secret 和 `FLUME_AGENTINBOX_INTAKE_SKILL`。
+
+### 唤醒目标
+
+通知 agent 只有 URL 和 exec 两种配置模式，不绑定具体 agent 实现。exec 是执行脚本并把
+prompt 作为参数，不是 stdio：不会向 stdin 写内容。参数按空格拆分，不经过 shell。
+`.env` 中值含空格必须带引号。`FLUME_WAKE_URL` 与 `FLUME_WAKE_EXEC` 同时设置会在启动时报错。
+
+- **exec / 任意脚本**：例如 `FLUME_WAKE_EXEC="/path/to/notify --target ops"`。命令按空格拆分，
+  完整唤醒 prompt 作为最后一个参数传入，可直接替换通知实现。
+- **exec / Shepherdr 示例**：`FLUME_WAKE_EXEC="hc space <space id>"` 会让 flume 查找该
+  space 的 live Assistant 并发送 prompt。space id 可从 `hc get <Assistant> --json`
+  返回的 `herdr.coordinator.space` 或 `herdr.space` 标签读取，或由 Shepherdr 提供。
+  `space` 是 flume 的约定，不是 `hc` 子命令；只有可执行文件名精确为 `hc` 时启用。
+- **URL**：设置 `FLUME_WAKE_URL=<URL>`，POST 四字段并带
+  `X-Flume-Activation-Mode: activation_only`。
+
+exec 模式必须配置 `FLUME_AGENTINBOX_INTAKE_SKILL`。每次 exec 调用都受
+`FLUME_WAKE_TIMEOUT` 约束。
 
 ### GitHub webhook secret
 
