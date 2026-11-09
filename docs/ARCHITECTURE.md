@@ -97,8 +97,7 @@ POST <wake-url> "<activation_only 四字段>"
 ```
 
 `FLUME_WAKE_EXEC` 配置可执行文件和参数。flume 按空格拆分后直接执行，不经过 shell，
-完整 prompt 是最后一个参数，不写 stdin。exec 模式要求
-`FLUME_AGENTINBOX_INTAKE_SKILL`，每次执行都受 `FLUME_WAKE_TIMEOUT` 约束。
+完整 prompt 是最后一个参数，不写 stdin。每次唤醒有 10 秒上限；
 同时配置 URL 与 exec 会在启动时报错。
 
 可执行文件名精确为 `hc` 且参数为 `space <space-id>` 时，flume 使用 Assistant 发现约定
@@ -106,10 +105,9 @@ POST <wake-url> "<activation_only 四字段>"
 `hc get <live-address> --json`，按 herdr 标签找到目标 space 的 Assistant，再执行
 `hc send <assistant-address> <prompt>`。这并不限制其他 exec 脚本的实现。
 
-prompt 只包含配置中的 `agentId`、经过校验的 `newEntryCount`、intake skill 路径和
-固定指令；`latestEntryId` 进入 prompt 和日志，`summary` 留在 flume 日志中。flume 把 skill 路径交给
-agent，由 agent 加载执行。coordinator 用 AgentInbox skill 读取 inbox，再读取
-`FLUME_AGENTINBOX_INTAKE_SKILL` 指向的策略文件。
+prompt 只包含配置中的 `agentId`、经过校验的 `newEntryCount` 和固定指令；
+`latestEntryId` 进入 prompt 和日志，`summary` 留在 flume 日志中。coordinator 用 AgentInbox
+skill 读取 inbox，再按名字加载 `workflow-event-intake` 策略 skill。
 
 agent 侧分三层：
 
@@ -129,8 +127,7 @@ review 的判据和步骤归任务执行层的
 由人类明确指令触发。
 
 flume 仓库提供 `templates/workflow-event-intake/` 作为起点。复制到 agent workspace，
-修改 `sources/github.md`（或新增 source policy），再把
-`FLUME_AGENTINBOX_INTAKE_SKILL` 指向复制后的 `SKILL.md`。activation payload 出现
+修改 `sources/github.md`（或新增 source policy）即可；skill 名字保持不变。activation payload 出现
 `entries` / `items` 等正文时，flume 返回 400。
 
 ### 5.1 URL 唤醒模式

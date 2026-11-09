@@ -60,7 +60,6 @@ test("posts the four-field activation_only payload to the herdr wake gate", asyn
   const flume = createFlumeServer({
     ...CONFIG,
     wakeUrl: `http://127.0.0.1:${wakePort}/wake`,
-    wakeTimeoutMs: 2_000,
   });
   await listen(flume);
 
@@ -257,8 +256,6 @@ test("supports a generic CLI command with agent arguments", async () => {
     ...CONFIG,
     wakeExec: `${herdrBin} agent prompt sw-coordinator`,
     inboxAgent: "herdr-main",
-    intakeSkill: "/tmp/workflow-event-intake/SKILL.md",
-    wakeTimeoutMs: 2_000,
   });
   await listen(flume);
 
@@ -278,8 +275,7 @@ test("supports a generic CLI command with agent arguments", async () => {
     assert.match(args, /agentId=herdr-main/);
     assert.match(args, /newEntryCount=1/);
     assert.match(args, /latestEntryId=entry-42/);
-    assert.match(args, /intakeSkill=\/tmp\/workflow-event-intake\/SKILL\.md/);
-    assert.match(args, /Follow \/tmp\/workflow-event-intake\/SKILL\.md/);
+    assert.match(args, /Follow the workflow-event-intake skill/);
     assert.match(args, /wake signal, not the event body/);
     assert.match(args, /at most 50 entries/);
     assert.match(args, /never `ack --all`/);
@@ -328,7 +324,6 @@ test("wakes only the live Assistant whose labels match the configured space", as
       activation,
       2_000,
       "inbox-agent",
-      "/tmp/workflow-event-intake/SKILL.md",
     );
 
     assert.equal(address, "t-assistant");
@@ -337,15 +332,11 @@ test("wakes only the live Assistant whose labels match the configured space", as
     assert.equal(sendArgs[1], "t-assistant");
     assert.equal(
       sendArgs.slice(2).join("\n"),
-      wakePrompt(
-        activation,
-        "inbox-agent",
-        "/tmp/workflow-event-intake/SKILL.md",
-      ),
+      wakePrompt(activation, "inbox-agent"),
     );
     assert.match(sendArgs.slice(2).join("\n"), /newEntryCount=2/);
     assert.match(sendArgs.slice(2).join("\n"), /latestEntryId=entry-42/);
-    assert.match(sendArgs.slice(2).join("\n"), /intakeSkill=/);
+    assert.match(sendArgs.slice(2).join("\n"), /workflow-event-intake/);
     assert.equal(await readFile(callsFile, "utf8"), "ls\n--json\nget\nt-other\nget\nt-helper\nget\nt-assistant\nsend\nt-assistant\n");
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -385,7 +376,6 @@ test("routes Assistant config through the activation handler and logs its target
   const flume = createFlumeServer({
     ...CONFIG,
     wakeExec: `${bin} space space-1`,
-    intakeSkill: "/tmp/SKILL.md",
   });
   const originalLog = console.log;
   const logs: string[] = [];
@@ -425,7 +415,6 @@ test("does not treat a custom executable ending in hc as Assistant discovery", a
   const flume = createFlumeServer({
     ...CONFIG,
     wakeExec: `${bin} space space-1`,
-    intakeSkill: "/tmp/SKILL.md",
   });
   await listen(flume);
 
@@ -463,11 +452,10 @@ test("passes the complete wake prompt to a generic CLI command", async () => {
       activation,
       2_000,
       "inbox-agent",
-      "/tmp/SKILL.md",
     );
     const args = (await readFile(argsFile, "utf8")).trimEnd().split("\n");
     assert.deepEqual(args.slice(0, 3), ["notify", "--target", "ops"]);
-    assert.equal(args.slice(3).join("\n"), wakePrompt(activation, "inbox-agent", "/tmp/SKILL.md"));
+    assert.equal(args.slice(3).join("\n"), wakePrompt(activation, "inbox-agent"));
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

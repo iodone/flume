@@ -33,21 +33,6 @@ export FLUME_WAKE_URL="${FLUME_WAKE_URL:-}"
 export FLUME_WAKE_EXEC="${FLUME_WAKE_EXEC:-}"
 # AgentInbox 中 coordinator 的 agent id；用于读取和确认 inbox。
 export FLUME_AGENTINBOX_AGENT_ID="${FLUME_AGENTINBOX_AGENT_ID:-}"
-# agent 侧的 event intake 策略；flume 只把路径传给唤醒 prompt，不执行它。
-# 没有内置默认值。复制 templates/workflow-event-intake/ 并把这里指向你的 SKILL.md。
-export FLUME_AGENTINBOX_INTAKE_SKILL="${FLUME_AGENTINBOX_INTAKE_SKILL:-}"
-export FLUME_WAKE_TIMEOUT="${FLUME_WAKE_TIMEOUT:-10}"
-
-if [[ -z "${FLUME_AGENTINBOX_INTAKE_SKILL:-}" ]]; then
-  echo "flume: FLUME_AGENTINBOX_INTAKE_SKILL is required; copy templates/workflow-event-intake/ and point it at your SKILL.md" >&2
-  exit 2
-fi
-
-if [[ ! -f "$FLUME_AGENTINBOX_INTAKE_SKILL" ]]; then
-  echo "flume: intake skill not found at $FLUME_AGENTINBOX_INTAKE_SKILL" >&2
-  exit 2
-fi
-
 load_secret() {
   local name="$1"
   local service="$2"
