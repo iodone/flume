@@ -101,7 +101,8 @@ POST <wake-url> "<activation_only 四字段>"
 `FLUME_AGENTINBOX_INTAKE_SKILL`，每次执行都受 `FLUME_WAKE_TIMEOUT` 约束。
 同时配置 URL 与 exec 会在启动时报错。
 
-`hc space <space-id>` 是一个 exec 示例：flume 执行 `hc ls --json`，对 live 终端执行
+可执行文件名精确为 `hc` 且参数为 `space <space-id>` 时，flume 使用 Assistant 发现约定
+（`space` 不是 `hc` 子命令）：flume 执行 `hc ls --json`，对 live 终端执行
 `hc get <live-address> --json`，按 herdr 标签找到目标 space 的 Assistant，再执行
 `hc send <assistant-address> <prompt>`。这并不限制其他 exec 脚本的实现。
 

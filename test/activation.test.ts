@@ -413,6 +413,42 @@ test("routes Assistant config through the activation handler and logs its target
   }
 });
 
+test("does not treat a custom executable ending in hc as Assistant discovery", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "flume-myhc-"));
+  const argsFile = join(directory, "args.txt");
+  const bin = join(directory, "myhc");
+  await writeFile(
+    bin,
+    `#!/bin/sh\nprintf '%s\\n' "$@" > "${argsFile}"\n`,
+    { mode: 0o755 },
+  );
+  const flume = createFlumeServer({
+    ...CONFIG,
+    wakeExec: `${bin} space space-1`,
+    intakeSkill: "/tmp/SKILL.md",
+  });
+  await listen(flume);
+
+  try {
+    const port = (flume.address() as AddressInfo).port;
+    const response = await post(port, "/activation", {
+      kind: KIND,
+      newEntryCount: 1,
+      latestEntryId: "entry-42",
+      summary: "1 new event",
+    });
+
+    assert.equal(response.status, 202);
+    assert.deepEqual(response.body, { accepted: 1 });
+    const args = (await readFile(argsFile, "utf8")).trimEnd().split("\n");
+    assert.deepEqual(args.slice(0, 2), ["space", "space-1"]);
+    assert.match(args[2]!, /^A flume activation arrived for AgentInbox\./);
+  } finally {
+    await close(flume);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("passes the complete wake prompt to a generic CLI command", async () => {
   const directory = await mkdtemp(join(tmpdir(), "flume-cli-"));
   const argsFile = join(directory, "args.txt");

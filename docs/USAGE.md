@@ -88,16 +88,19 @@ AgentInbox 的 source 和订阅由部署配置；flume 侧集中设置 `FLUME_AD
 shell。例如自定义脚本：
 
 ```bash
-FLUME_WAKE_EXEC='/path/to/notify --target ops'
+FLUME_WAKE_EXEC="/path/to/notify --target ops"
 FLUME_AGENTINBOX_INTAKE_SKILL=/absolute/path/to/SKILL.md
 ```
 
 Shepherdr 的一个 exec 示例：
 
 ```bash
-FLUME_WAKE_EXEC=hc space <space-id>
+FLUME_WAKE_EXEC="hc space <space-id>"
 FLUME_AGENTINBOX_INTAKE_SKILL=/absolute/path/to/SKILL.md
 ```
+
+`.env` 中值含空格必须带引号；`space` 是 flume 的 Assistant 发现约定，不是 `hc` 子命令。
+只有可执行文件名精确为 `hc` 时使用该约定，其他脚本仍按普通 exec 调用。
 
 该示例中，space id 可从 `hc get <Assistant> --json` 返回的
 `labels["herdr.coordinator.space"]` 或 `labels["herdr.space"]` 读取，也可由 Shepherdr

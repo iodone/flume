@@ -155,13 +155,14 @@ AgentInbox 的 source 和订阅由部署配置；flume 侧集中设置 `FLUME_AD
 
 通知 agent 只有 URL 和 exec 两种配置模式，不绑定具体 agent 实现。exec 是执行脚本并把
 prompt 作为参数，不是 stdio：不会向 stdin 写内容。参数按空格拆分，不经过 shell。
-`FLUME_WAKE_URL` 与 `FLUME_WAKE_EXEC` 同时设置会在启动时报错。
+`.env` 中值含空格必须带引号。`FLUME_WAKE_URL` 与 `FLUME_WAKE_EXEC` 同时设置会在启动时报错。
 
-- **exec / 任意脚本**：例如 `FLUME_WAKE_EXEC='/path/to/notify --target ops'`。命令按空格拆分，
+- **exec / 任意脚本**：例如 `FLUME_WAKE_EXEC="/path/to/notify --target ops"`。命令按空格拆分，
   完整唤醒 prompt 作为最后一个参数传入，可直接替换通知实现。
-- **exec / Shepherdr 示例**：`FLUME_WAKE_EXEC='hc space <space id>'` 会让 flume 查找该
+- **exec / Shepherdr 示例**：`FLUME_WAKE_EXEC="hc space <space id>"` 会让 flume 查找该
   space 的 live Assistant 并发送 prompt。space id 可从 `hc get <Assistant> --json`
   返回的 `herdr.coordinator.space` 或 `herdr.space` 标签读取，或由 Shepherdr 提供。
+  `space` 是 flume 的约定，不是 `hc` 子命令；只有可执行文件名精确为 `hc` 时启用。
 - **URL**：设置 `FLUME_WAKE_URL=<URL>`，POST 四字段并带
   `X-Flume-Activation-Mode: activation_only`。
 

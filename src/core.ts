@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import path from "node:path";
 
 import {
   Activation,
@@ -317,7 +318,7 @@ async function handleActivation(
   try {
     const timeoutMs = config.wakeTimeoutMs ?? DEFAULT_WAKE_TIMEOUT_MS;
     const [bin, ...args] = config.wakeExec?.split(/\s+/) ?? [];
-    if (bin?.endsWith("hc") && args[0] === "space" && args.length === 2) {
+    if (bin && path.basename(bin) === "hc" && args[0] === "space" && args.length === 2) {
       const address = await dispatchHerdrAssistant(
         bin,
         args[1]!,
