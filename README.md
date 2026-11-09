@@ -147,7 +147,7 @@ $EDITOR .env
 | `FLUME_WAKE_EXEC` | 未设置 | exec 模式：执行任意脚本，完整 prompt 作为最后参数；Shepherdr 写 `hc space <id>` |
 | `FLUME_AGENTINBOX_AGENT_ID` | 未设置 | coordinator 在 AgentInbox 中的 agent id，用于读取和确认 inbox |
 | `FLUME_AGENTINBOX_INTAKE_SKILL` | **exec 模式必填** | 指向你自己配置过的 `SKILL.md`；flume 只传路径，由 agent 加载执行；缺失时拒绝启动 |
-| `FLUME_WAKE_TIMEOUT` | `10` | 唤醒命令超时，单位秒 |
+| `FLUME_WAKE_TIMEOUT` | 直接运行 `5`；`run-flume.sh` 导出 `10` | 唤醒命令超时，单位秒 |
 
 AgentInbox 的 source 和订阅由部署配置；flume 侧集中设置 `FLUME_ADAPTERS`、webhook secret 和 `FLUME_AGENTINBOX_INTAKE_SKILL`。
 
@@ -159,7 +159,7 @@ prompt 作为参数，不是 stdio：不会向 stdin 写内容。参数按空格
 
 - **exec / 任意脚本**：例如 `FLUME_WAKE_EXEC="/path/to/notify --target ops"`。命令按空格拆分，
   完整唤醒 prompt 作为最后一个参数传入，可直接替换通知实现。
-- **exec / Shepherdr 示例**：`FLUME_WAKE_EXEC="hc space <space id>"` 会让 flume 查找该
+- **exec / Shepherdr 示例**：`FLUME_WAKE_EXEC="hc space <space-id>"` 会让 flume 查找该
   space 的 live Assistant 并发送 prompt。space id 可从 `hc get <Assistant> --json`
   返回的 `herdr.coordinator.space` 或 `herdr.space` 标签读取，或由 Shepherdr 提供。
   `space` 是 flume 的约定，不是 `hc` 子命令；只有可执行文件名精确为 `hc` 时启用。

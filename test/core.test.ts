@@ -7,6 +7,7 @@ import {
   MAX_BODY_BYTES,
   configFromEnv,
   createFlumeServer,
+  isHcSpaceExec,
   isLoopbackAddress,
   type Config,
   type FeedFunction,
@@ -61,6 +62,13 @@ test("configFromEnv enables only the requested adapters", () => {
   );
 });
 
+test("recognizes only the exact hc space command shape", () => {
+  assert.equal(isHcSpaceExec("/usr/local/bin/hc", ["space", "space-1"]), true);
+  assert.equal(isHcSpaceExec("myhc", ["space", "space-1"]), false);
+  assert.equal(isHcSpaceExec("hc", ["space"]), false);
+  assert.equal(isHcSpaceExec("hc", ["space", "space-1", "extra"]), false);
+});
+
 test("configFromEnv accepts exec commands and rejects mixed wake modes", () => {
   const required = {
     AGENTINBOX_SOURCE_ID: "src-1",
@@ -78,6 +86,20 @@ test("configFromEnv accepts exec commands and rejects mixed wake modes", () => {
     /set only one of FLUME_WAKE_URL and FLUME_WAKE_EXEC/,
   );
   assert.throws(() => configFromEnv({ ...required, FLUME_WAKE_EXEC: "hc" }), /hc space <space-id>/);
+});
+
+test("configFromEnv rejects hc space without an id despite repeated whitespace", () => {
+  const required = {
+    AGENTINBOX_SOURCE_ID: "src-1",
+    FLUME_GITHUB_SECRET: "gh-secret",
+    FLUME_AGENTINBOX_INTAKE_SKILL: "/tmp/SKILL.md",
+  };
+  for (const wakeExec of ["hc  space", "hc\tspace", "hc space  "]) {
+    assert.throws(
+      () => configFromEnv({ ...required, FLUME_WAKE_EXEC: wakeExec }),
+      /hc space <space-id>/,
+    );
+  }
 });
 
 test("configFromEnv requires an intake skill for exec wake", () => {

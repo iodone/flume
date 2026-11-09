@@ -104,7 +104,9 @@ POST <wake-url> "<activation_only 四字段>"
 可执行文件名精确为 `hc` 且参数为 `space <space-id>` 时，flume 使用 Assistant 发现约定
 （`space` 不是 `hc` 子命令）：flume 执行 `hc ls --json`，对 live 终端执行
 `hc get <live-address> --json`，按 herdr 标签找到目标 space 的 Assistant，再执行
-`hc send <assistant-address> <prompt>`。这并不限制其他 exec 脚本的实现。
+`hc send <assistant-address> <prompt>`。space id 从 `hc get <Assistant> --json` 返回的
+`labels["herdr.coordinator.space"]` 或 `labels["herdr.space"]` 读取，也可由 Shepherdr
+提供。这并不限制其他 exec 脚本的实现。
 
 prompt 只包含配置中的 `agentId`、经过校验的 `newEntryCount`、intake skill 路径和
 固定指令；`latestEntryId` 进入 prompt 和日志，`summary` 留在 flume 日志中。flume 把 skill 路径交给

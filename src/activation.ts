@@ -210,7 +210,7 @@ export async function dispatchWakeExec(
       (error, _stdout, stderr) => {
         if (error) {
           const detail = stderr.trim().replace(/\s+/g, " ").slice(0, 500) ||
-            error.message;
+            error.message.slice(0, 500);
           reject(new WakeGateError(`wake exec failed: ${detail}`));
           return;
         }

@@ -246,16 +246,16 @@ test("returns 503 when a wake is needed but no wake gate is configured", async (
 test("supports a generic CLI command with agent arguments", async () => {
   const directory = await mkdtemp(join(tmpdir(), "flume-herdr-"));
   const argsFile = join(directory, "args.txt");
-  const herdrBin = join(directory, "herdr");
+  const genericBin = join(directory, "herdr");
   await writeFile(
-    herdrBin,
+    genericBin,
     `#!/bin/sh\nprintf '%s\\n' "$@" > "${argsFile}"\n`,
     { mode: 0o755 },
   );
 
   const flume = createFlumeServer({
     ...CONFIG,
-    wakeExec: `${herdrBin} agent prompt sw-coordinator`,
+    wakeExec: `${genericBin} agent prompt sw-coordinator`,
     inboxAgent: "herdr-main",
     intakeSkill: "/tmp/workflow-event-intake/SKILL.md",
     wakeTimeoutMs: 2_000,
@@ -468,6 +468,54 @@ test("passes the complete wake prompt to a generic CLI command", async () => {
     const args = (await readFile(argsFile, "utf8")).trimEnd().split("\n");
     assert.deepEqual(args.slice(0, 3), ["notify", "--target", "ops"]);
     assert.equal(args.slice(3).join("\n"), wakePrompt(activation, "inbox-agent", "/tmp/SKILL.md"));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("truncates the exec error message when stderr is empty", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "flume-error-"));
+  const bin = join(directory, "fail");
+  await writeFile(bin, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+
+  try {
+    await assert.rejects(
+      dispatchWakeExec(
+        bin,
+        ["x".repeat(600), "SENSITIVE_TAIL"],
+        new Activation(1, "entry-42", "1 new event"),
+      ),
+      (error: unknown) => {
+        assert.ok(error instanceof WakeGateError);
+        assert.equal(error.message.length, "wake exec failed: ".length + 500);
+        assert.doesNotMatch(error.message, /SENSITIVE_TAIL/);
+        return true;
+      },
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("terminates an exec command that exceeds its timeout", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "flume-timeout-"));
+  const pidFile = join(directory, "pid");
+
+  try {
+    await assert.rejects(
+      dispatchWakeExec(
+        "/bin/sh",
+        ["-c", `printf '%s' "$$" > "${pidFile}"; while :; do sleep 1; done`],
+        new Activation(1, "entry-42", "1 new event"),
+        200,
+      ),
+      WakeGateError,
+    );
+    const pid = Number(await readFile(pidFile, "utf8"));
+    assert.throws(
+      () => process.kill(pid, 0),
+      (error: NodeJS.ErrnoException) => error.code === "ESRCH",
+    );
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

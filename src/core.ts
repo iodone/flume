@@ -82,7 +82,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
   }
 
   const wakeUrl = env.FLUME_WAKE_URL?.trim() || undefined;
-  const wakeExec = env.FLUME_WAKE_EXEC?.trim() || undefined;
+  const wakeExec = env.FLUME_WAKE_EXEC?.trim().replace(/\s+/g, " ") || undefined;
   const intakeSkill = env.FLUME_AGENTINBOX_INTAKE_SKILL?.trim() || undefined;
   if (wakeUrl && wakeExec) {
     throw new ConfigError("set only one of FLUME_WAKE_URL and FLUME_WAKE_EXEC");
@@ -119,6 +119,15 @@ export function createFlumeServer(
   return createServer((request, response) => {
     void handleRequest(config, feedFn, request, response);
   });
+}
+
+export function isHcSpaceExec(
+  bin: string | undefined,
+  args: readonly string[],
+): bin is string {
+  return Boolean(
+    bin && path.basename(bin) === "hc" && args[0] === "space" && args.length === 2,
+  );
 }
 
 export function localAddress(server: Server): AddressInfo {
@@ -318,7 +327,7 @@ async function handleActivation(
   try {
     const timeoutMs = config.wakeTimeoutMs ?? DEFAULT_WAKE_TIMEOUT_MS;
     const [bin, ...args] = config.wakeExec?.split(/\s+/) ?? [];
-    if (bin && path.basename(bin) === "hc" && args[0] === "space" && args.length === 2) {
+    if (isHcSpaceExec(bin, args)) {
       const address = await dispatchHerdrAssistant(
         bin,
         args[1]!,
