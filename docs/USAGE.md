@@ -73,14 +73,36 @@ $EDITOR .env
 | `FLUME_GITLAB_TOKEN` | 未设置 | 仅在启用 `gitlab` adapter 时需要 |
 | `FLUME_BIND` | `0.0.0.0` | 监听地址；只允许本机访问时改 `127.0.0.1` |
 | `FLUME_PORT` | `19420` | 监听端口；修改后 webhook URL 要同步修改 |
+| `FLUME_HERDR_WAKE_ASSISTANT` | 未设置 | Shepherdr 模式：唤醒该 space 当前的 Assistant；按终端 herdr 标签定位 |
 | `FLUME_HERDR_WAKE_AGENT` | 未设置 | 唤醒器使用的 coordinator agent 名；workspace 名独立配置 |
+| `FLUME_HERDR_WAKE_URL` | 未设置 | HTTP 模式：向外部 HTTP 唤醒器的 endpoint POST 激活字段 |
 | `FLUME_AGENTINBOX_AGENT_ID` | 未设置 | coordinator 在 AgentInbox 中的 agent id，用于读取和确认 inbox |
-| `FLUME_AGENTINBOX_INTAKE_SKILL` | **必填** | 指向你自己配置过的 `SKILL.md`；flume 只传路径，由 agent 加载执行；缺失时拒绝启动 |
-| `HERDR_BIN_PATH` | `herdr` | 当前 herdr 示例的唤醒器可执行文件路径 |
+| `FLUME_AGENTINBOX_INTAKE_SKILL` | **Assistant / agent 模式必填** | 指向你自己配置过的 `SKILL.md`；flume 只传路径，由 agent 加载执行；缺失时拒绝启动 |
+| `FLUME_HERDR_HC_BIN` | `hc` | Assistant 模式使用的 Herdr CLI 可执行文件 |
+| `HERDR_BIN_PATH` | `herdr` | 旧版 agent 模式的唤醒器可执行文件路径 |
 | `FLUME_HERDR_WAKE_TIMEOUT` | `10` | 唤醒命令超时，单位秒 |
-| `FLUME_HERDR_WAKE_URL` | 未设置 | 外部 HTTP 唤醒器的 endpoint；herdr 示例走命令唤醒 |
 
 AgentInbox 的 source 和订阅由部署配置；flume 侧集中设置 `FLUME_ADAPTERS`、webhook secret 和 `FLUME_AGENTINBOX_INTAKE_SKILL`。
+
+### 唤醒目标（三选一）
+
+`FLUME_HERDR_WAKE_ASSISTANT`、`FLUME_HERDR_WAKE_AGENT`、`FLUME_HERDR_WAKE_URL`
+**三种目标只设一种**，同时设置多个会在启动时报错。
+
+Shepherdr 下设置：
+
+```bash
+FLUME_HERDR_WAKE_ASSISTANT=<space-id>
+FLUME_HERDR_HC_BIN=hc
+FLUME_AGENTINBOX_INTAKE_SKILL=/absolute/path/to/SKILL.md
+```
+
+space id 可从 `hc get <Assistant> --json` 返回的
+`labels["herdr.coordinator.space"]` 或 `labels["herdr.space"]` 读取，也可由 Shepherdr
+提供。flume 每次唤醒都重新列出 live 终端、读取标签，只向匹配的 Assistant 执行
+`hc send`，不依赖终端地址固定不变。找不到 Assistant 或 `hc` 失败时 activation 返回
+502；没有设置任何唤醒目标时返回 503。旧版 agent 模式仍执行
+`herdr agent prompt`；HTTP 模式仍 POST 四字段和 `activation_only` 请求头。
 
 例如临时换端口：
 
@@ -285,9 +307,9 @@ AgentInbox 写 inbox 后向 flume `/activation` 发送：
 
 flume 只接受上述四个字段。`newEntryCount == 0` 返回 `202 {"accepted":0}`；大于 `0` 时执行唤醒命令。
 
-prompt 只包含配置中的 `agentId`、经过校验的 `newEntryCount`、intake skill 路径和固定指令；事件正文由 coordinator 从 inbox 读取。`latestEntryId` 和 `summary` 只用于日志。coordinator 收到后用 AgentInbox skill 读取 inbox，并读取 `FLUME_AGENTINBOX_INTAKE_SKILL` 指向的策略文件。
+prompt 只包含配置中的 `agentId`、经过校验的 `newEntryCount`、`latestEntryId`、intake skill 路径和固定指令；事件正文由 coordinator 从 inbox 读取。`summary` 只用于日志。coordinator 收到后用 AgentInbox skill 读取 inbox，并读取 `FLUME_AGENTINBOX_INTAKE_SKILL` 指向的策略文件。
 
-如果设置 `FLUME_HERDR_WAKE_AGENT=""` 并改用 `FLUME_HERDR_WAKE_URL`，flume 会向该 URL POST 四个字段并带 `X-Flume-Activation-Mode: activation_only`。这是外部 HTTP 唤醒器的兼容模式；herdr 示例走命令唤醒。
+如果改用 `FLUME_HERDR_WAKE_URL`，flume 会向该 URL POST 四个字段并带 `X-Flume-Activation-Mode: activation_only`。这是外部 HTTP 唤醒器的兼容模式。它与 Assistant、旧版 agent 两种目标互斥；配置 Assistant 后，同一空间当前的 live Assistant 会收到与旧版 agent 完全相同的 prompt。
 
 ## 7. Adapters
 

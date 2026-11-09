@@ -61,6 +61,47 @@ test("configFromEnv enables only the requested adapters", () => {
   );
 });
 
+test("configFromEnv accepts Assistant wake config and rejects conflicting targets", () => {
+  const required = {
+    AGENTINBOX_SOURCE_ID: "src-1",
+    FLUME_GITHUB_SECRET: "gh-secret",
+    FLUME_AGENTINBOX_INTAKE_SKILL: "/tmp/SKILL.md",
+  };
+  const config = configFromEnv({
+    ...required,
+    FLUME_HERDR_WAKE_ASSISTANT: "space-1",
+    FLUME_HERDR_HC_BIN: "/opt/homebrew/bin/hc",
+  });
+  assert.equal(config.wakeAssistant, "space-1");
+  assert.equal(config.hcBin, "/opt/homebrew/bin/hc");
+
+  const targets = {
+    FLUME_HERDR_WAKE_ASSISTANT: "space-1",
+    FLUME_HERDR_WAKE_AGENT: "coordinator",
+    FLUME_HERDR_WAKE_URL: "http://127.0.0.1:5000/wake",
+  };
+  for (const first of Object.keys(targets)) {
+    for (const second of Object.keys(targets)) {
+      if (first === second) continue;
+      assert.throws(
+        () => configFromEnv({ ...required, [first]: targets[first as keyof typeof targets], [second]: targets[second as keyof typeof targets] }),
+        /set only one of/,
+      );
+    }
+  }
+});
+
+test("configFromEnv requires an intake skill for Assistant wake", () => {
+  assert.throws(
+    () => configFromEnv({
+      AGENTINBOX_SOURCE_ID: "src-1",
+      FLUME_GITHUB_SECRET: "gh-secret",
+      FLUME_HERDR_WAKE_ASSISTANT: "space-1",
+    }),
+    /FLUME_AGENTINBOX_INTAKE_SKILL/,
+  );
+});
+
 interface Response {
   status: number;
   body: Record<string, unknown>;

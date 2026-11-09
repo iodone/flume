@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 
-import type { JsonObject } from "./envelope.js";
+import { isJsonObject, type JsonObject } from "./envelope.js";
 
 export const KIND = "agentinbox.activation";
 export const ACTIVATION_MODE = "activation_only";
@@ -171,15 +171,12 @@ export async function dispatchActivation(
   await response.body?.cancel().catch(() => undefined);
 }
 
-export async function dispatchHerdrPrompt(
-  bin: string,
-  agent: string,
+export function herdrWakePrompt(
   activation: Activation,
-  timeoutMs: number = DEFAULT_WAKE_TIMEOUT_MS,
   inboxAgent?: string,
   intakeSkill?: string,
-): Promise<void> {
-  const prompt = [
+): string {
+  return [
     "A flume activation arrived for AgentInbox.",
     ...(inboxAgent ? [`agentId=${inboxAgent}`] : []),
     `newEntryCount=${activation.newEntryCount}`,
@@ -194,6 +191,17 @@ export async function dispatchHerdrPrompt(
     "3. Ack only through the last inspected entry; never `ack --all`.",
     "4. Reply with entries reviewed, tasks added/updated, entries acked, and anything ambiguous.",
   ].join("\n");
+}
+
+export async function dispatchHerdrPrompt(
+  bin: string,
+  agent: string,
+  activation: Activation,
+  timeoutMs: number = DEFAULT_WAKE_TIMEOUT_MS,
+  inboxAgent?: string,
+  intakeSkill?: string,
+): Promise<void> {
+  const prompt = herdrWakePrompt(activation, inboxAgent, intakeSkill);
 
   await new Promise<void>((resolve, reject) => {
     execFile(
@@ -206,6 +214,97 @@ export async function dispatchHerdrPrompt(
           return;
         }
         resolve();
+      },
+    );
+  });
+}
+
+interface HcTerminal {
+  address: string;
+  state?: string;
+}
+
+export async function dispatchHerdrAssistant(
+  bin: string,
+  spaceId: string,
+  activation: Activation,
+  timeoutMs: number = DEFAULT_WAKE_TIMEOUT_MS,
+  inboxAgent?: string,
+  intakeSkill?: string,
+): Promise<string> {
+  const listing = await runHc(bin, ["ls", "--json"], timeoutMs);
+  let terminals: HcTerminal[];
+  try {
+    const document: unknown = JSON.parse(listing);
+    if (!isJsonObject(document) || !Array.isArray(document.terminals)) {
+      throw new Error("terminals is missing");
+    }
+    terminals = document.terminals.filter(isJsonObject).map((terminal) => ({
+      address: typeof terminal.address === "string" ? terminal.address : "",
+      state: typeof terminal.state === "string" ? terminal.state : undefined,
+    }));
+  } catch {
+    throw new WakeGateError("herdr assistant discovery failed: invalid hc ls JSON");
+  }
+
+  const inspected: string[] = [];
+  for (const candidate of terminals) {
+    if (candidate.state !== "live" || typeof candidate.address !== "string") {
+      continue;
+    }
+    const detail = await runHc(bin, ["get", candidate.address, "--json"], timeoutMs);
+    let labels: Record<string, unknown> = {};
+    try {
+      const document: unknown = JSON.parse(detail);
+      if (!isJsonObject(document)) {
+        throw new Error("terminal is not an object");
+      }
+      if (isJsonObject(document.labels)) {
+        labels = document.labels;
+      }
+    } catch {
+      throw new WakeGateError(
+        `herdr assistant discovery failed: invalid hc get JSON for ${candidate.address}`,
+      );
+    }
+    const role = typeof labels["herdr.role"] === "string"
+      ? labels["herdr.role"]
+      : "unknown";
+    inspected.push(`${candidate.address} (role=${role})`);
+    if (
+      role === "coordinator" &&
+      (labels["herdr.coordinator.space"] === spaceId ||
+        labels["herdr.space"] === spaceId)
+    ) {
+      const prompt = herdrWakePrompt(activation, inboxAgent, intakeSkill);
+      await runHc(bin, ["send", candidate.address, prompt], timeoutMs);
+      return candidate.address;
+    }
+  }
+
+  throw new WakeGateError(
+    `herdr assistant not found for space=${spaceId}; live terminals: ${inspected.join(", ") || "none"}`,
+  );
+}
+
+async function runHc(
+  bin: string,
+  args: string[],
+  timeoutMs: number,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      bin,
+      args,
+      { timeout: timeoutMs, maxBuffer: 1024 * 1024 },
+      (error, stdout, stderr) => {
+        if (error) {
+          const detail = stderr.trim().replace(/\s+/g, " ").slice(0, 500) ||
+            error.message;
+          reject(new WakeGateError(`hc ${args[0]} failed: ${detail}`));
+          return;
+        }
+        resolve(stdout);
       },
     );
   });

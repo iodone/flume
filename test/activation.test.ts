@@ -8,7 +8,10 @@ import test from "node:test";
 
 import {
   Activation,
+  dispatchHerdrAssistant,
+  herdrWakePrompt,
   KIND,
+  WakeGateError,
   type ActivationPayload,
 } from "../src/activation.js";
 import { createFlumeServer, type Config } from "../src/core.js";
@@ -288,6 +291,162 @@ test("calls herdr agent prompt directly when wakeAgent is configured", async () 
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("wakes only the live Assistant whose labels match the configured space", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "flume-hc-"));
+  const { bin, callsFile, sendFile } = await fakeHc(directory, [
+    {
+      address: "t-other",
+      labels: {
+        "herdr.role": "coordinator",
+        "herdr.coordinator.space": "space-other",
+      },
+    },
+    {
+      address: "t-helper",
+      labels: { "herdr.role": "helper", "herdr.space": "space-1" },
+    },
+    {
+      address: "t-assistant",
+      labels: {
+        "herdr.role": "coordinator",
+        "herdr.coordinator.space": "space-1",
+      },
+    },
+    {
+      address: "t-finished",
+      state: "finished",
+      labels: { "herdr.role": "coordinator", "herdr.space": "space-1" },
+    },
+  ]);
+  const activation = new Activation(2, "entry-42", "2 new events");
+
+  try {
+    const address = await dispatchHerdrAssistant(
+      bin,
+      "space-1",
+      activation,
+      2_000,
+      "inbox-agent",
+      "/tmp/workflow-event-intake/SKILL.md",
+    );
+
+    assert.equal(address, "t-assistant");
+    const sendArgs = (await readFile(sendFile, "utf8")).trimEnd().split("\n");
+    assert.equal(sendArgs[0], "send");
+    assert.equal(sendArgs[1], "t-assistant");
+    assert.equal(
+      sendArgs.slice(2).join("\n"),
+      herdrWakePrompt(
+        activation,
+        "inbox-agent",
+        "/tmp/workflow-event-intake/SKILL.md",
+      ),
+    );
+    assert.match(sendArgs.slice(2).join("\n"), /newEntryCount=2/);
+    assert.match(sendArgs.slice(2).join("\n"), /latestEntryId=entry-42/);
+    assert.match(sendArgs.slice(2).join("\n"), /intakeSkill=/);
+    assert.equal(await readFile(callsFile, "utf8"), "ls\n--json\nget\nt-other\nget\nt-helper\nget\nt-assistant\nsend\nt-assistant\n");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("does not send when no live terminal is the Assistant for the space", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "flume-hc-"));
+  const { bin, callsFile } = await fakeHc(directory, [
+    { address: "t-worker", labels: { "herdr.role": "helper" } },
+  ]);
+
+  try {
+    await assert.rejects(
+      dispatchHerdrAssistant(bin, "space-missing", new Activation(1, "entry-1", "new")),
+      (error: unknown) => {
+        assert.ok(error instanceof WakeGateError);
+        assert.match(error.message, /space-missing/);
+        assert.match(error.message, /t-worker \(role=helper\)/);
+        return true;
+      },
+    );
+    assert.equal(await readFile(callsFile, "utf8"), "ls\n--json\nget\nt-worker\n");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("routes Assistant config through the activation handler and logs its target", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "flume-hc-"));
+  const { bin, sendFile } = await fakeHc(directory, [
+    {
+      address: "t16",
+      labels: { "herdr.role": "coordinator", "herdr.space": "space-1" },
+    },
+  ]);
+  const flume = createFlumeServer({
+    ...CONFIG,
+    wakeAssistant: "space-1",
+    hcBin: bin,
+    intakeSkill: "/tmp/SKILL.md",
+  });
+  const originalLog = console.log;
+  const logs: string[] = [];
+  console.log = (message: string) => logs.push(message);
+  await listen(flume);
+
+  try {
+    const port = (flume.address() as AddressInfo).port;
+    const response = await post(port, "/activation", {
+      kind: KIND,
+      newEntryCount: 1,
+      latestEntryId: "entry-42",
+      summary: "1 new event",
+    });
+
+    assert.equal(response.status, 202);
+    assert.match(await readFile(sendFile, "utf8"), /^send\nt16\n/);
+    assert.ok(logs.some((line) =>
+      line.includes("woke herdr assistant=t16 space=space-1")
+    ));
+  } finally {
+    console.log = originalLog;
+    await close(flume);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+interface FakeTerminal {
+  address: string;
+  state?: string;
+  labels: Record<string, string>;
+}
+
+async function fakeHc(
+  directory: string,
+  terminals: FakeTerminal[],
+): Promise<{ bin: string; callsFile: string; sendFile: string }> {
+  const bin = join(directory, "hc");
+  const callsFile = join(directory, "calls.txt");
+  const sendFile = join(directory, "send.txt");
+  const cases = terminals.map((terminal) =>
+    `    ${terminal.address}) printf '%s\\n' '${JSON.stringify({ address: terminal.address, labels: terminal.labels })}' ;;`,
+  );
+  await writeFile(
+    bin,
+    `#!/bin/sh
+printf '%s\\n' "$1" "$2" >> "${callsFile}"
+case "$1" in
+  ls) printf '%s\\n' '${JSON.stringify({ terminals: terminals.map(({ address, state = "live" }) => ({ address, state })) })}' ;;
+  get)
+    case "$2" in
+${cases.join("\n")}
+    esac ;;
+  send) printf '%s\\n' "$@" > "${sendFile}" ;;
+esac
+`,
+    { mode: 0o755 },
+  );
+  return { bin, callsFile, sendFile };
+}
 
 function listen(server: Server): Promise<void> {
   return new Promise((resolve, reject) => {

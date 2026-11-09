@@ -7,6 +7,7 @@ import {
   ActivationError,
   DEFAULT_WAKE_TIMEOUT_MS,
   dispatchActivation,
+  dispatchHerdrAssistant,
   dispatchHerdrPrompt,
   WakeGateError,
 } from "./activation.js";
@@ -36,9 +37,11 @@ export interface Config {
   secrets: Record<string, string>;
   wakeUrl?: string;
   wakeAgent?: string;
+  wakeAssistant?: string;
   inboxAgent?: string;
   intakeSkill?: string;
   herdrBin?: string;
+  hcBin?: string;
   wakeTimeoutMs?: number;
 }
 
@@ -81,10 +84,17 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
   }
 
   const wakeAgent = env.FLUME_HERDR_WAKE_AGENT?.trim() || undefined;
+  const wakeAssistant = env.FLUME_HERDR_WAKE_ASSISTANT?.trim() || undefined;
+  const wakeUrl = env.FLUME_HERDR_WAKE_URL?.trim() || undefined;
   const intakeSkill = env.FLUME_AGENTINBOX_INTAKE_SKILL?.trim() || undefined;
-  if (wakeAgent && !intakeSkill) {
+  if ([wakeAgent, wakeAssistant, wakeUrl].filter(Boolean).length > 1) {
     throw new ConfigError(
-      "FLUME_AGENTINBOX_INTAKE_SKILL is required when FLUME_HERDR_WAKE_AGENT is set",
+      "set only one of FLUME_HERDR_WAKE_ASSISTANT, FLUME_HERDR_WAKE_AGENT, FLUME_HERDR_WAKE_URL",
+    );
+  }
+  if ((wakeAgent || wakeAssistant) && !intakeSkill) {
+    throw new ConfigError(
+      "FLUME_AGENTINBOX_INTAKE_SKILL is required when FLUME_HERDR_WAKE_AGENT or FLUME_HERDR_WAKE_ASSISTANT is set",
     );
   }
 
@@ -96,11 +106,13 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
     secrets: Object.fromEntries(
       selected.map((adapter) => [adapter.NAME, env[adapter.SECRET_ENV]!]),
     ),
-    wakeUrl: env.FLUME_HERDR_WAKE_URL?.trim() || undefined,
+    wakeUrl,
     wakeAgent,
+    wakeAssistant,
     inboxAgent: env.FLUME_AGENTINBOX_AGENT_ID?.trim() || undefined,
     intakeSkill,
     herdrBin: env.HERDR_BIN_PATH?.trim() || "herdr",
+    hcBin: env.FLUME_HERDR_HC_BIN?.trim() || "hc",
     wakeTimeoutMs: timeoutSeconds * 1_000,
   };
 }
@@ -299,17 +311,27 @@ async function handleActivation(
     sendJson(response, 202, { accepted: 0 });
     return;
   }
-  if (!config.wakeAgent && !config.wakeUrl) {
+  if (!config.wakeAssistant && !config.wakeAgent && !config.wakeUrl) {
     console.error(
-      "flume: activation rejected: FLUME_HERDR_WAKE_AGENT or FLUME_HERDR_WAKE_URL is not set",
+      "flume: activation rejected: FLUME_HERDR_WAKE_ASSISTANT, FLUME_HERDR_WAKE_AGENT, or FLUME_HERDR_WAKE_URL is not set",
     );
     sendJson(response, 503, { error: "wake gate not configured" });
     return;
   }
 
+  let assistant: string | undefined;
   try {
     const timeoutMs = config.wakeTimeoutMs ?? DEFAULT_WAKE_TIMEOUT_MS;
-    if (config.wakeAgent) {
+    if (config.wakeAssistant) {
+      assistant = await dispatchHerdrAssistant(
+        config.hcBin ?? "hc",
+        config.wakeAssistant,
+        activation,
+        timeoutMs,
+        config.inboxAgent,
+        config.intakeSkill,
+      );
+    } else if (config.wakeAgent) {
       await dispatchHerdrPrompt(
         config.herdrBin ?? "herdr",
         config.wakeAgent,
@@ -328,7 +350,9 @@ async function handleActivation(
     return;
   }
 
-  const target = config.wakeAgent
+  const target = config.wakeAssistant
+    ? `assistant=${assistant} space=${config.wakeAssistant}`
+    : config.wakeAgent
     ? `agent=${config.wakeAgent}`
     : `url=${config.wakeUrl}`;
   console.log(

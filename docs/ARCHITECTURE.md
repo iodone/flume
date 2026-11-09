@@ -89,14 +89,21 @@ AgentInbox 细节留在 coordinator。
 inbox entry id 由 AgentInbox 生成：source event 写入后，AgentInbox 通过 activation
 带上 `newEntryCount` 和 `latestEntryId`。flume 等这次写入完成后唤醒 agent。
 
-当前示例路径是执行唤醒器命令：
+唤醒器有三种互斥目标，由配置选择：
 
 ```text
-wake <coordinator-agent> "<固定唤醒文本>"
+hc ls --json → hc get <live-address> --json → hc send <assistant-address> "<固定唤醒文本>"
+herdr agent prompt <coordinator-agent> "<固定唤醒文本>"
+POST <wake-url> "<activation_only 四字段>"
 ```
 
+Shepherdr Assistant 是第一种路径。flume 只检查 live 终端的标签，选择
+`herdr.role=coordinator` 且 `herdr.coordinator.space` 或 `herdr.space` 等于
+`FLUME_HERDR_WAKE_ASSISTANT` 的终端。每次 `hc` 调用都有独立超时；非零退出、找不到目标
+都会成为 wake-gate 错误。三种目标同时配置超过一个会在启动时报错。
+
 prompt 只包含配置中的 `agentId`、经过校验的 `newEntryCount`、intake skill 路径和
-固定指令；`latestEntryId` 和 `summary` 留在 flume 日志中。flume 把 skill 路径交给
+固定指令；`latestEntryId` 进入 prompt 和日志，`summary` 留在 flume 日志中。flume 把 skill 路径交给
 agent，由 agent 加载执行。coordinator 用 AgentInbox skill 读取 inbox，再读取
 `FLUME_AGENTINBOX_INTAKE_SKILL` 指向的策略文件。
 
@@ -122,12 +129,14 @@ flume 仓库提供 `templates/workflow-event-intake/` 作为起点。复制到 a
 `FLUME_AGENTINBOX_INTAKE_SKILL` 指向复制后的 `SKILL.md`。activation payload 出现
 `entries` / `items` 等正文时，flume 返回 400。
 
-`FLUME_HERDR_WAKE_AGENT` 指定当前 herdr 示例中的 coordinator agent 名；workspace
-名独立配置。超时由 `FLUME_HERDR_WAKE_TIMEOUT` 控制。
+`FLUME_HERDR_WAKE_AGENT` 指定旧版 herdr 示例中的 coordinator agent 名；workspace
+名独立配置。`FLUME_HERDR_HC_BIN`（默认 `hc`）指定 Assistant 模式的 CLI。超时由
+`FLUME_HERDR_WAKE_TIMEOUT` 控制。Assistant 与 agent 模式共用同一个 prompt 构造函数，
+均要求 `FLUME_AGENTINBOX_INTAKE_SKILL`。
 
 ### 5.1 HTTP 唤醒兼容模式
 
-如果未设置 `FLUME_HERDR_WAKE_AGENT`，但设置了 `FLUME_HERDR_WAKE_URL`，flume 会
+如果只设置了 `FLUME_HERDR_WAKE_URL`，flume 会
 POST 四字段并带 `X-Flume-Activation-Mode: activation_only`：
 
 ```http
