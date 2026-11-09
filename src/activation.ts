@@ -4,7 +4,8 @@ import { isJsonObject, type JsonObject } from "./envelope.js";
 
 export const KIND = "agentinbox.activation";
 export const ACTIVATION_MODE = "activation_only";
-export const DEFAULT_WAKE_TIMEOUT_MS = 5_000;
+export const DEFAULT_WAKE_TIMEOUT_MS = 10_000;
+export const INTAKE_SKILL = "workflow-event-intake";
 
 const BODY_FIELDS = ["entries", "items"] as const;
 
@@ -174,20 +175,16 @@ export async function dispatchActivation(
 export function wakePrompt(
   activation: Activation,
   inboxAgent?: string,
-  intakeSkill?: string,
 ): string {
   return [
     "A flume activation arrived for AgentInbox.",
     ...(inboxAgent ? [`agentId=${inboxAgent}`] : []),
     `newEntryCount=${activation.newEntryCount}`,
     `latestEntryId=${activation.latestEntryId}`,
-    ...(intakeSkill ? [`intakeSkill=${intakeSkill}`] : []),
     "",
     "This is a wake signal, not the event body.",
     "1. Read the unacked inbox for agentId, at most 50 entries; record the last entryId you inspect.",
-    ...(intakeSkill
-      ? [`2. Follow ${intakeSkill}. It is the only policy for classification, dedupe, task changes, and ack.`]
-      : ["2. Follow the configured intake policy for classification, dedupe, task changes, and ack."]),
+    `2. Follow the ${INTAKE_SKILL} skill from your workspace. It is the only policy for classification, dedupe, task changes, and ack.`,
     "3. Ack only through the last inspected entry; never `ack --all`.",
     "4. Reply with entries reviewed, tasks added/updated, entries acked, and anything ambiguous.",
   ].join("\n");
@@ -199,9 +196,8 @@ export async function dispatchWakeExec(
   activation: Activation,
   timeoutMs: number = DEFAULT_WAKE_TIMEOUT_MS,
   inboxAgent?: string,
-  intakeSkill?: string,
 ): Promise<void> {
-  const prompt = wakePrompt(activation, inboxAgent, intakeSkill);
+  const prompt = wakePrompt(activation, inboxAgent);
   await new Promise<void>((resolve, reject) => {
     execFile(
       bin,
@@ -231,7 +227,6 @@ export async function dispatchHerdrAssistant(
   activation: Activation,
   timeoutMs: number = DEFAULT_WAKE_TIMEOUT_MS,
   inboxAgent?: string,
-  intakeSkill?: string,
 ): Promise<string> {
   const listing = await runHc(bin, ["ls", "--json"], timeoutMs);
   let terminals: HcTerminal[];
@@ -277,7 +272,7 @@ export async function dispatchHerdrAssistant(
       (labels["herdr.coordinator.space"] === spaceId ||
         labels["herdr.space"] === spaceId)
     ) {
-      const prompt = wakePrompt(activation, inboxAgent, intakeSkill);
+      const prompt = wakePrompt(activation, inboxAgent);
       await runHc(bin, ["send", candidate.address, prompt], timeoutMs);
       return candidate.address;
     }

@@ -39,8 +39,6 @@ export interface Config {
   wakeUrl?: string;
   wakeExec?: string;
   inboxAgent?: string;
-  intakeSkill?: string;
-  wakeTimeoutMs?: number;
 }
 
 export type FeedFunction = (
@@ -75,25 +73,13 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
     throw new ConfigError("FLUME_PORT must be an integer from 0 to 65535");
   }
 
-  const timeoutText = env.FLUME_WAKE_TIMEOUT || "5";
-  const timeoutSeconds = Number(timeoutText);
-  if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
-    throw new ConfigError("FLUME_WAKE_TIMEOUT must be positive");
-  }
-
   const wakeUrl = env.FLUME_WAKE_URL?.trim() || undefined;
   const wakeExec = env.FLUME_WAKE_EXEC?.trim().replace(/\s+/g, " ") || undefined;
-  const intakeSkill = env.FLUME_AGENTINBOX_INTAKE_SKILL?.trim() || undefined;
   if (wakeUrl && wakeExec) {
     throw new ConfigError("set only one of FLUME_WAKE_URL and FLUME_WAKE_EXEC");
   }
   if (wakeExec === "hc" || wakeExec === "hc space") {
     throw new ConfigError("FLUME_WAKE_EXEC hc requires a space: hc space <space-id>");
-  }
-  if (wakeExec && !intakeSkill) {
-    throw new ConfigError(
-      "FLUME_AGENTINBOX_INTAKE_SKILL is required when FLUME_WAKE_EXEC is set",
-    );
   }
 
   return {
@@ -107,8 +93,6 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
     wakeUrl,
     wakeExec,
     inboxAgent: env.FLUME_AGENTINBOX_AGENT_ID?.trim() || undefined,
-    intakeSkill,
-    wakeTimeoutMs: timeoutSeconds * 1_000,
   };
 }
 
@@ -325,7 +309,7 @@ async function handleActivation(
 
   let target = config.wakeUrl ? `url=${config.wakeUrl}` : `exec=${config.wakeExec}`;
   try {
-    const timeoutMs = config.wakeTimeoutMs ?? DEFAULT_WAKE_TIMEOUT_MS;
+    const timeoutMs = DEFAULT_WAKE_TIMEOUT_MS;
     const [bin, ...args] = config.wakeExec?.split(/\s+/) ?? [];
     if (isHcSpaceExec(bin, args)) {
       const address = await dispatchHerdrAssistant(
@@ -334,7 +318,6 @@ async function handleActivation(
         activation,
         timeoutMs,
         config.inboxAgent,
-        config.intakeSkill,
       );
       target = `exec=hc assistant=${address} space=${args[1]}`;
     } else if (bin) {
@@ -344,7 +327,6 @@ async function handleActivation(
         activation,
         timeoutMs,
         config.inboxAgent,
-        config.intakeSkill,
       );
     } else {
       await dispatchActivation(config.wakeUrl!, activation, timeoutMs);
