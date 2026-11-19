@@ -35,14 +35,13 @@ test("Collie mode rejects ambiguous transports and requires a source", () => {
   );
 });
 
-test("webhook bytes and signature headers are forwarded to Collie", async () => {
-  const received: { path?: string; token?: string; body?: Buffer; contentType?: string } = {};
+test("normalized flume envelope is forwarded to Collie", async () => {
+  const received: { path?: string; body?: Buffer; contentType?: string } = {};
   const sink = http.createServer((request, response) => {
     const chunks: Buffer[] = [];
     request.on("data", (chunk: Buffer) => chunks.push(chunk));
     request.on("end", () => {
       received.path = request.url;
-      received.token = request.headers["x-gitlab-token"] as string | undefined;
       received.contentType = request.headers["content-type"] as string | undefined;
       received.body = Buffer.concat(chunks);
       response.writeHead(200, { "content-type": "application/json" });
@@ -57,7 +56,7 @@ test("webhook bytes and signature headers are forwarded to Collie", async () => 
     port: 0,
     sourceId: "",
     secrets: { gitlab: TOKEN },
-    collie: { source: "gitlab", url: `http://127.0.0.1:${port}` },
+    collie: { source: "flume", url: `http://127.0.0.1:${port}` },
   });
   await listen(flume);
   const { port: flumePort } = flume.address() as AddressInfo;
@@ -80,10 +79,13 @@ test("webhook bytes and signature headers are forwarded to Collie", async () => 
     await close(sink);
   }
 
-  assert.equal(received.path, "/v1/in/gitlab");
-  assert.equal(received.token, TOKEN);
+  assert.equal(received.path, "/v1/in/flume");
   assert.equal(received.contentType, "application/json");
-  assert.equal(received.body?.toString("utf8"), HOOK);
+  const envelope = JSON.parse(received.body!.toString("utf8"));
+  assert.equal(envelope.source, "gitlab");
+  assert.equal(envelope.event, "merge_request.opened");
+  assert.equal(envelope.native_id, "evt-7");
+  assert.deepEqual(envelope.payload, JSON.parse(HOOK));
 });
 
 function listen(server: Server): Promise<void> {

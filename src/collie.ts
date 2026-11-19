@@ -2,19 +2,9 @@ import http from "node:http";
 import https from "node:https";
 import { homedir } from "node:os";
 import path from "node:path";
-import type { IncomingHttpHeaders } from "node:http";
+import type { Envelope } from "./envelope.js";
 
 const TIMEOUT_MS = 15_000;
-const SKIP_HEADERS = new Set([
-  "host",
-  "connection",
-  "content-length",
-  "transfer-encoding",
-  "keep-alive",
-  "proxy-connection",
-  "upgrade",
-]);
-
 export class CollieFeedError extends Error {
   constructor(message: string) {
     super(message);
@@ -37,22 +27,22 @@ export function collieSocketPath(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 /**
- * Forward the original webhook to Collie's source adapter. Collie owns the
- * Event shape (data_ref, merge lane, space mapping), so flume must not
- * re-encode the body: the signature and the bytes must stay identical.
+ * Forward the normalized flume envelope to Collie. Flume owns webhook
+ * verification and normalization; Collie owns persistence, dedupe, merge and
+ * coordinator dispatch. The envelope is open-ended and is never mapped to a
+ * VCS object here.
  */
 export async function feedCollie(
-  headers: IncomingHttpHeaders,
-  body: Buffer,
+  envelope: Envelope,
   sink: CollieSink,
 ): Promise<void> {
   const endpoint = `/v1/in/${encodeURIComponent(sink.source)}`;
   const timeoutMs = sink.timeoutMs ?? TIMEOUT_MS;
-  const outgoing: http.OutgoingHttpHeaders = { "content-length": body.length };
-  for (const [name, value] of Object.entries(headers)) {
-    if (value === undefined || SKIP_HEADERS.has(name.toLowerCase())) continue;
-    outgoing[name] = value;
-  }
+  const body = Buffer.from(JSON.stringify(envelope.toJSON()));
+  const outgoing: http.OutgoingHttpHeaders = {
+    "content-type": "application/json",
+    "content-length": body.length,
+  };
 
   await new Promise<void>((resolve, reject) => {
     const fail = (error: Error): void => reject(new CollieFeedError(error.message));

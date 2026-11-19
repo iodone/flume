@@ -247,7 +247,7 @@ async function handleRequest(
 
   try {
     if (config.collie) {
-      await feedCollie(request.headers, body, config.collie);
+      await feedCollie(envelope, config.collie);
     } else {
       await feedFn(envelope, { sourceId: config.sourceId });
     }

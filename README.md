@@ -2,7 +2,7 @@
 
 零状态事件转运层：把外部系统的事件**验签 → 归一成统一 envelope → 喂进收件箱或 Collie → 转发唤醒**。命名自渡槽：只负责把水从这头运到那头。
 
-默认是 **flume + AgentInbox**：flume 负责接入和搬运，AgentInbox 负责去重、持久化、订阅、inbox 和 activation。设置 `FLUME_COLLIE_SOURCE` 后进入 **Collie 模式**：flume 只做验签，把原始 webhook 字节和签名头转发到 Collie 的 `/v1/in/<source>`，由 Collie 负责 Event、去重、归并和 coordinator 派发；不再启动 AgentInbox，也不需要 wake gate。
+默认是 **flume + AgentInbox**：flume 负责接入和搬运，AgentInbox 负责去重、持久化、订阅、inbox 和 activation。设置 `FLUME_COLLIE_SOURCE` 后进入 **Collie 模式**：flume 只做验签，把统一 envelope 转发到 Collie 的 `/v1/in/<source>`，由 Collie 负责持久化、去重、归并和 coordinator 派发；不再启动 AgentInbox，也不需要 wake gate。
 
 [使用指南 → docs/USAGE.md](docs/USAGE.md) · [架构 → docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · [Adapter 与扩展 → docs/ADAPTERS.md](docs/ADAPTERS.md) · [卸载 → docs/REMOVAL.md](docs/REMOVAL.md)
 
@@ -157,14 +157,16 @@ AgentInbox 的 source 和订阅由部署配置；flume 侧集中设置 `FLUME_AD
 Collie 模式把 flume 当作**有验签能力的反向代理**，不启动 AgentInbox：
 
 ```text
-GitLab/GitHub → flume（验签）→ Collie /v1/in/<source>（Event、去重、归并、派发）→ coordinator
+GitLab/GitHub → flume（验签 + 归一 envelope）→ Collie /v1/in/<source>（持久化、去重、归并、派发）→ coordinator → agent
 ```
+
+Collie 不重新解释 webhook，也不根据 `merge_request` / `issue` 硬编码业务分类；它只保存 envelope，交给 coordinator 和 agent 理解。
 
 `.env` 示例：
 
 ```bash
 FLUME_ADAPTERS=gitlab
-FLUME_COLLIE_SOURCE=gitlab
+FLUME_COLLIE_SOURCE=flume
 FLUME_COLLIE_SOCKET=$HOME/.local/state/collie/service.sock
 # 或：FLUME_COLLIE_URL=http://127.0.0.1:19421
 ```
@@ -174,17 +176,16 @@ Collie 侧配置 `~/.config/collie/sources.json`：
 ```json
 {
   "sources": {
-    "gitlab": {
-      "adapter": "gitlab",
+    "flume": {
+      "adapter": "flume",
       "space": "collie",
-      "space_map": { "group/project": "collie" },
-      "secret_env": "FLUME_GITLAB_TOKEN"
+      "space_map": { "group/project": "collie" }
     }
   }
 }
 ```
 
-flume 保留原始 body 和签名头，Collie 的 source adapter 仍会按自己的 `secret` / `secret_env` 再验一次；本地 Unix socket 在未配置 secret 时视为本地可信，远程 `FLUME_COLLIE_URL` 应配置 secret。GitLab 事件进入后，Collie 自己创建 Event 和 Decision，不需要 `/activation` 或 intake skill。
+flume 已经完成验签和归一；Collie 的 `flume` adapter 只把 envelope 落成 Event，不再重复验签或解析 webhook。本地 Unix socket 视为可信；远程 `FLUME_COLLIE_URL` 应在 flume 与 Collie 之间配置边界 token。事件进入后，Collie 自己创建 Event 和 Decision，不需要 `/activation` 或 intake skill。
 
 ### 唤醒目标
 
