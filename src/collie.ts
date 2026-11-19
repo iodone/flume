@@ -13,9 +13,10 @@ export class CollieFeedError extends Error {
 }
 
 export interface CollieSink {
-  source: string;
+  space: string;
   socketPath?: string;
   url?: string;
+  token?: string;
   timeoutMs?: number;
 }
 
@@ -36,12 +37,13 @@ export async function feedCollie(
   envelope: Envelope,
   sink: CollieSink,
 ): Promise<void> {
-  const endpoint = `/v1/in/${encodeURIComponent(sink.source)}`;
+  const endpoint = "/v1/ingress";
   const timeoutMs = sink.timeoutMs ?? TIMEOUT_MS;
-  const body = Buffer.from(JSON.stringify(envelope.toJSON()));
+  const body = Buffer.from(JSON.stringify({ ...envelope.toJSON(), space: sink.space }));
   const outgoing: http.OutgoingHttpHeaders = {
     "content-type": "application/json",
     "content-length": body.length,
+    ...(sink.token ? { authorization: `Bearer ${sink.token}` } : {}),
   };
 
   await new Promise<void>((resolve, reject) => {

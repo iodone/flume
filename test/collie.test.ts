@@ -16,22 +16,23 @@ test("Collie mode does not require AgentInbox or a wake target", () => {
   const config = configFromEnv({
     FLUME_ADAPTERS: "gitlab",
     FLUME_GITLAB_TOKEN: TOKEN,
-    FLUME_COLLIE_SOURCE: "gitlab",
+    FLUME_COLLIE_SPACE: "collie",
+    FLUME_COLLIE_SOCKET: "/tmp/collie.sock",
   });
-  assert.equal(config.collie?.source, "gitlab");
-  assert.match(config.collie?.socketPath ?? "", /collie\/service\.sock$/);
+  assert.equal(config.collie?.space, "collie");
+  assert.equal(config.collie?.socketPath, "/tmp/collie.sock");
   assert.equal(config.sourceId, "");
 });
 
 test("Collie mode rejects ambiguous transports and requires a source", () => {
   const base = { FLUME_GITLAB_TOKEN: TOKEN, FLUME_ADAPTERS: "gitlab" };
   assert.throws(
-    () => configFromEnv({ ...base, FLUME_COLLIE_URL: "http://127.0.0.1:1", FLUME_COLLIE_SOCKET: "/tmp/s" }),
-    /FLUME_COLLIE_SOURCE is required/,
+    () => configFromEnv({ ...base, FLUME_COLLIE_URL: "http://127.0.0.1:1", FLUME_COLLIE_SOCKET: "/tmp/s", FLUME_COLLIE_SPACE: "collie" }),
+    /set only one/,
   );
   assert.throws(
-    () => configFromEnv({ ...base, FLUME_COLLIE_SOURCE: "gitlab", FLUME_COLLIE_URL: "http://127.0.0.1:1", FLUME_COLLIE_SOCKET: "/tmp/s" }),
-    /set only one/,
+    () => configFromEnv({ ...base, FLUME_COLLIE_SOCKET: "/tmp/s" }),
+    /FLUME_COLLIE_SPACE is required/,
   );
 });
 
@@ -56,7 +57,7 @@ test("normalized flume envelope is forwarded to Collie", async () => {
     port: 0,
     sourceId: "",
     secrets: { gitlab: TOKEN },
-    collie: { source: "flume", url: `http://127.0.0.1:${port}` },
+    collie: { space: "collie", url: `http://127.0.0.1:${port}` },
   });
   await listen(flume);
   const { port: flumePort } = flume.address() as AddressInfo;
@@ -79,12 +80,13 @@ test("normalized flume envelope is forwarded to Collie", async () => {
     await close(sink);
   }
 
-  assert.equal(received.path, "/v1/in/flume");
+  assert.equal(received.path, "/v1/ingress");
   assert.equal(received.contentType, "application/json");
   const envelope = JSON.parse(received.body!.toString("utf8"));
   assert.equal(envelope.source, "gitlab");
   assert.equal(envelope.event, "merge_request.opened");
   assert.equal(envelope.native_id, "evt-7");
+  assert.equal(envelope.space, "collie");
   assert.deepEqual(envelope.payload, JSON.parse(HOOK));
 });
 

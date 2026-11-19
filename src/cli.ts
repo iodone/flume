@@ -65,7 +65,7 @@ export async function main(
     await listen(server, config);
     const address = localAddress(server);
     const target = config.collie
-      ? `collie/${config.collie.source} via ${config.collie.url ?? config.collie.socketPath}`
+      ? `collie intake space=${config.collie.space} via ${config.collie.url ?? config.collie.socketPath}`
       : `agentinbox ${daemon?.child ? "started" : "attached"} at ${daemon?.socketPath}`;
     process.stdout.write(
       `flume: listening on ${address.address}:${address.port}; ${target}\n`,

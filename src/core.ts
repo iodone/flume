@@ -60,14 +60,15 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
     }
     return adapter;
   });
-  const collieSource = env.FLUME_COLLIE_SOURCE?.trim() || undefined;
+  const collieSpace = env.FLUME_COLLIE_SPACE?.trim() || undefined;
+  const collieToken = env.FLUME_COLLIE_TOKEN?.trim() || undefined;
   const collieUrl = env.FLUME_COLLIE_URL?.trim() || undefined;
   const collieSocket = env.FLUME_COLLIE_SOCKET?.trim() || undefined;
-  const collieMode = Boolean(collieSource || collieUrl || collieSocket);
-  if (collieMode && !collieSource) {
-    throw new ConfigError("FLUME_COLLIE_SOURCE is required in Collie mode");
+  const collieMode = Boolean(collieUrl || collieSocket);
+  if (collieMode && !collieSpace) {
+    throw new ConfigError("FLUME_COLLIE_SPACE is required in Collie mode");
   }
-  if (collieSource && collieUrl && collieSocket) {
+  if (collieUrl && collieSocket) {
     throw new ConfigError("set only one of FLUME_COLLIE_URL and FLUME_COLLIE_SOCKET");
   }
   const required = [
@@ -96,7 +97,8 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
 
   const collie = collieMode
     ? {
-        source: collieSource!,
+        space: collieSpace!,
+        ...(collieToken ? { token: collieToken } : {}),
         ...(collieUrl ? { url: collieUrl } : {}),
         ...(collieSocket ? { socketPath: collieSocket } : !collieUrl ? { socketPath: collieSocketPath(env) } : {}),
       }
@@ -253,14 +255,14 @@ async function handleRequest(
     }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    const target = config.collie ? `collie/${config.collie.source}` : "agentinbox";
+    const target = config.collie ? "collie intake" : "agentinbox";
     console.error(`flume: feed failed for ${envelope.event} to ${target}: ${detail}`);
     sendJson(response, 502, { error: "feed failed" });
     return;
   }
 
   console.log(
-    `flume: accepted event=${envelope.event} native_id=${envelope.native_id} subject=${envelope.subject} sink=${config.collie ? `collie/${config.collie.source}` : "agentinbox"}`,
+    `flume: accepted event=${envelope.event} native_id=${envelope.native_id} subject=${envelope.subject} sink=${config.collie ? "collie/intake" : "agentinbox"}`,
   );
   sendJson(response, 202, { accepted: 1 });
 }
