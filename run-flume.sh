@@ -35,6 +35,7 @@ export FLUME_WAKE_EXEC="${FLUME_WAKE_EXEC:-}"
 export FLUME_AGENTINBOX_AGENT_ID="${FLUME_AGENTINBOX_AGENT_ID:-}"
 # Generic delivery command; envelope JSON goes to stdin.
 export FLUME_FEED_EXEC="${FLUME_FEED_EXEC:-}"
+export FLUME_FEED_TIMEOUT_MS="${FLUME_FEED_TIMEOUT_MS:-}"
 load_secret() {
   local name="$1"
   local service="$2"

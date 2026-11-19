@@ -40,6 +40,7 @@ export interface Config {
   wakeExec?: string;
   inboxAgent?: string;
   feedExec?: string;
+  feedTimeoutMs?: number;
 }
 
 export type FeedFunction = (
@@ -60,6 +61,11 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
     return adapter;
   });
   const feedExec = env.FLUME_FEED_EXEC?.trim().replace(/\s+/g, " ") || undefined;
+  const feedTimeoutText = env.FLUME_FEED_TIMEOUT_MS?.trim();
+  const feedTimeoutMs = feedTimeoutText ? Number(feedTimeoutText) : undefined;
+  if (feedTimeoutMs !== undefined && (!Number.isInteger(feedTimeoutMs) || feedTimeoutMs < 1)) {
+    throw new ConfigError("FLUME_FEED_TIMEOUT_MS must be a positive integer");
+  }
   const required = [
     ...(feedExec ? [] : ["AGENTINBOX_SOURCE_ID"]),
     ...selected.map((adapter) => adapter.SECRET_ENV),
@@ -96,6 +102,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
     wakeExec,
     inboxAgent: env.FLUME_AGENTINBOX_AGENT_ID?.trim() || undefined,
     ...(feedExec ? { feedExec } : {}),
+    ...(feedTimeoutMs ? { feedTimeoutMs } : {}),
   };
 }
 
@@ -229,7 +236,7 @@ async function handleRequest(
 
   try {
     if (config.feedExec) {
-      await feedExec(envelope, config.feedExec);
+      await feedExec(envelope, config.feedExec, config.feedTimeoutMs);
     } else {
       await feedFn(envelope, { sourceId: config.sourceId });
     }

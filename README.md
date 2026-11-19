@@ -140,6 +140,7 @@ $EDITOR .env
 | `FLUME_ADAPTERS` | `github` | 启用的事件源，逗号分隔：`github`、`gitlab` 或 `github,gitlab` |
 | `AGENTINBOX_SOURCE_ID` | 默认模式必填 | AgentInbox 的 source id；设置 `FLUME_FEED_EXEC` 后不需要 |
 | `FLUME_FEED_EXEC` | 未设置 | 通用投递命令；envelope JSON 从 stdin 传入，不绑定目标服务 |
+| `FLUME_FEED_TIMEOUT_MS` | `15000` | 投递 exec 的超时；目标服务处理较慢时调大 |
 | `FLUME_GITHUB_SECRET` | 从 Keychain 读取 | GitHub webhook secret；非 macOS 或本地测试时可直接用环境变量 |
 | `FLUME_GITLAB_TOKEN` | 未设置 | 仅在启用 `gitlab` adapter 时需要 |
 | `FLUME_BIND` | `0.0.0.0` | 监听地址；只允许本机访问时改 `127.0.0.1` |
