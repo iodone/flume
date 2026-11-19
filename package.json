@@ -1,7 +1,7 @@
 {
   "name": "flume",
   "version": "0.1.0",
-  "description": "Stateless bridge from external webhooks to AgentInbox or Collie ingress",
+  "description": "Stateless bridge from external webhooks to AgentInbox or a generic delivery exec",
   "type": "module",
   "bin": {
     "flume": "dist/src/cli.js"

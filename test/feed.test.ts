@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import http, { type Server } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
 import { Envelope } from "../src/envelope.js";
-import { feed } from "../src/feed.js";
+import { feed, feedExec } from "../src/feed.js";
 
 test("feed posts the AgentInbox unix-socket event shape", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "flume-feed-"));
@@ -70,3 +70,25 @@ function close(server: Server): Promise<void> {
     server.close((error) => (error ? reject(error) : resolve()));
   });
 }
+
+test("feed exec writes the normalized envelope to the CLI's stdin", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "flume-exec-"));
+  const script = path.join(directory, "deliver.sh");
+  const output = path.join(directory, "event.json");
+  await writeFile(script, `#!/bin/sh\ncat > "$1"\n`, { mode: 0o755 });
+  await chmod(script, 0o755);
+  const envelope = new Envelope({
+    native_id: "evt-exec",
+    event: "note.created",
+    occurred_at: "2026-11-19T11:30:00+00:00",
+    source: "custom",
+    subject: "anything",
+    payload: { open: true },
+  });
+  try {
+    await feedExec(envelope, `${script} ${output}`);
+    assert.deepEqual(JSON.parse(await readFile(output, "utf8")), envelope.toJSON());
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

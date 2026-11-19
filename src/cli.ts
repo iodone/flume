@@ -57,15 +57,15 @@ export async function main(
 
   let daemon: Daemon | null = null;
   try {
-    // Collie owns dedupe, persistence and dispatch; no AgentInbox or wake gate is involved.
-    if (!config.collie) {
+    // A generic delivery exec owns persistence/dispatch; no AgentInbox or wake gate is involved.
+    if (!config.feedExec) {
       daemon = await ensureAgentInbox(daemonEnvironment(runtimeEnv));
     }
     const server = createFlumeServer(config);
     await listen(server, config);
     const address = localAddress(server);
-    const target = config.collie
-      ? `collie intake space=${config.collie.space} via ${config.collie.url ?? config.collie.socketPath}`
+    const target = config.feedExec
+      ? `feed exec=${config.feedExec}`
       : `agentinbox ${daemon?.child ? "started" : "attached"} at ${daemon?.socketPath}`;
     process.stdout.write(
       `flume: listening on ${address.address}:${address.port}; ${target}\n`,

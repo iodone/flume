@@ -23,6 +23,52 @@ export interface FeedOptions {
   timeoutMs?: number;
 }
 
+/** Generic delivery: the configured executable receives one envelope JSON on stdin. */
+export async function feedExec(
+  envelope: Envelope,
+  command: string,
+  timeoutMs: number = TIMEOUT_MS,
+): Promise<void> {
+  const [bin, ...args] = command.split(/\s+/).filter(Boolean);
+  if (!bin) throw new FeedError("FLUME_FEED_EXEC is empty");
+
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let stderr = "";
+    const child = spawn(bin, args, { stdio: ["pipe", "ignore", "pipe"] });
+
+    const finish = (error?: Error): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) reject(error);
+      else resolve();
+    };
+
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      finish(new FeedError(`feed exec timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr = (stderr + chunk.toString("utf8")).slice(-4096);
+    });
+    child.once("error", (error) => {
+      finish(new FeedError(`cannot run ${bin}: ${error.message}`));
+    });
+    child.once("close", (code, signal) => {
+      if (code === 0) {
+        finish();
+        return;
+      }
+      const detail = oneLine(stderr).slice(0, 300);
+      finish(new FeedError(`feed exec exited ${code ?? signal ?? "unknown"}${detail ? `: ${detail}` : ""}`));
+    });
+    child.stdin?.on("error", (error) => finish(new FeedError(`feed exec stdin failed: ${error.message}`)));
+    child.stdin?.end(JSON.stringify(envelope.toJSON()));
+  });
+}
+
 export async function feed(envelope: Envelope, options: FeedOptions): Promise<void> {
   const socketPath = options.socketPath ?? agentInboxSocketPath();
   const timeoutMs = options.timeoutMs ?? TIMEOUT_MS;

@@ -62,6 +62,16 @@ test("configFromEnv enables only the requested adapters", () => {
   );
 });
 
+test("feed exec replaces AgentInbox without naming a target service", () => {
+  const config = configFromEnv({
+    FLUME_ADAPTERS: "gitlab",
+    FLUME_GITLAB_TOKEN: "gl-token",
+    FLUME_FEED_EXEC: "/tmp/deliver --flag",
+  });
+  assert.equal(config.feedExec, "/tmp/deliver --flag");
+  assert.equal(config.sourceId, "");
+});
+
 test("recognizes only the exact hc space command shape", () => {
   assert.equal(isHcSpaceExec("/usr/local/bin/hc", ["space", "space-1"]), true);
   assert.equal(isHcSpaceExec("myhc", ["space", "space-1"]), false);

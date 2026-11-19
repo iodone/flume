@@ -1,8 +1,8 @@
 # flume
 
-零状态事件转运层：把外部系统的事件**验签 → 归一成统一 envelope → 喂进收件箱或 Collie → 转发唤醒**。命名自渡槽：只负责把水从这头运到那头。
+零状态事件转运层：把外部系统的事件**验签 → 归一成统一 envelope → 喂进收件箱或投递 exec**。命名自渡槽：只负责把水从这头运到那头。
 
-默认是 **flume + AgentInbox**：flume 负责接入和搬运，AgentInbox 负责去重、持久化、订阅、inbox 和 activation。设置 `FLUME_COLLIE_SOCKET` 或 `FLUME_COLLIE_URL` 后进入 **Collie 模式**：flume 只做验签，把统一 envelope 直接提交到 Collie 的通用 intake `/v1/ingress`，由 Collie 负责持久化、去重、归并和 coordinator 派发；不再启动 AgentInbox，也不需要 wake gate。
+默认是 **flume + AgentInbox**：flume 负责接入和搬运，AgentInbox 负责去重、持久化、订阅、inbox 和 activation。设置 `FLUME_FEED_EXEC` 后，flume 把统一 envelope 通过 stdin 交给任意投递 CLI；flume 不知道目标服务是什么，也不启动 AgentInbox。
 
 [使用指南 → docs/USAGE.md](docs/USAGE.md) · [架构 → docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · [Adapter 与扩展 → docs/ADAPTERS.md](docs/ADAPTERS.md) · [卸载 → docs/REMOVAL.md](docs/REMOVAL.md)
 
@@ -138,11 +138,8 @@ $EDITOR .env
 | 变量 | 默认值 | 用途 |
 | :--- | :--- | :--- |
 | `FLUME_ADAPTERS` | `github` | 启用的事件源，逗号分隔：`github`、`gitlab` 或 `github,gitlab` |
-| `AGENTINBOX_SOURCE_ID` | 默认模式必填 | AgentInbox 的 source id；设置 Collie 的 socket/URL 后不需要 |
-| `FLUME_COLLIE_SOCKET` | 未设置 | Collie 模式：Unix socket；设置后进入通用 intake |
-| `FLUME_COLLIE_SPACE` | Collie 模式必填 | 提交给 Collie 的 space；事件由该 space 的 coordinator 判断 |
-| `FLUME_COLLIE_TOKEN` | 未设置 | TCP 模式下的 Collie ingress Bearer token；需与 `~/.config/collie/sources.json` 的 client 对应 |
-| `FLUME_COLLIE_URL` | 未设置 | Collie 模式下的 HTTP base URL；与 socket 二选一，适合远程或容器 |
+| `AGENTINBOX_SOURCE_ID` | 默认模式必填 | AgentInbox 的 source id；设置 `FLUME_FEED_EXEC` 后不需要 |
+| `FLUME_FEED_EXEC` | 未设置 | 通用投递命令；envelope JSON 从 stdin 传入，不绑定目标服务 |
 | `FLUME_GITHUB_SECRET` | 从 Keychain 读取 | GitHub webhook secret；非 macOS 或本地测试时可直接用环境变量 |
 | `FLUME_GITLAB_TOKEN` | 未设置 | 仅在启用 `gitlab` adapter 时需要 |
 | `FLUME_BIND` | `0.0.0.0` | 监听地址；只允许本机访问时改 `127.0.0.1` |
@@ -153,28 +150,23 @@ $EDITOR .env
 
 AgentInbox 的 source 和订阅由部署配置；flume 侧集中设置 `FLUME_ADAPTERS`、webhook secret 和唤醒目标。
 
-### Collie 模式
+### 通用投递 exec
 
-Collie 模式把 flume 当作**有验签能力的反向代理**，不启动 AgentInbox：
-
-```text
-GitLab/GitHub → flume（验签 + 归一 envelope）→ Collie /v1/ingress（持久化、去重、归并、派发）→ coordinator → agent
-```
-
-Collie 不重新解释 webhook，也不根据 `merge_request` / `issue` 硬编码业务分类；它只保存 envelope，交给 coordinator 和 agent 理解。
-
-`.env` 示例：
+`FLUME_FEED_EXEC` 是一个与目标服务无关的投递命令。flume 只把归一后的 envelope JSON 写到它的 stdin：
 
 ```bash
-FLUME_ADAPTERS=gitlab
-FLUME_COLLIE_SOCKET=$HOME/.local/state/collie/service.sock
-FLUME_COLLIE_SPACE=collie
-# 或：FLUME_COLLIE_URL=http://127.0.0.1:19421
+FLUME_FEED_EXEC="/path/to/your-delivery-cli --some-arg"
 ```
 
-Collie 侧不需要 source adapter，也不需要 `sources.json` 条目；通用 intake 只要求 envelope 带 `space`（flume 通过 `FLUME_COLLIE_SPACE` 注入）。
+投递目标是 Collie、消息队列、审计服务还是其他系统，都由这个 CLI 自己决定；flume 不包含任何目标服务的 SDK、endpoint 或字段映射。
 
-flume 已经完成验签和归一；它调用 `collie intake` 的同一个 `/v1/ingress` 入口。Collie 只把 envelope 落成 Event，不理解 vendor schema。事件进入后，Collie 自己创建 Event 和 Decision，不需要 `/activation` 或 intake skill。
+例如，用 Collie 提供的 intake CLI：
+
+```bash
+FLUME_FEED_EXEC="/Users/mi/.local/bin/collie intake event --file - --space collie"
+```
+
+这里 `collie intake` 是普通 CLI，flume 只负责把 envelope 交给它；换成别的服务只需要改这一行配置，不需要改 flume 代码。
 
 ### 唤醒目标
 

@@ -33,11 +33,8 @@ export FLUME_WAKE_URL="${FLUME_WAKE_URL:-}"
 export FLUME_WAKE_EXEC="${FLUME_WAKE_EXEC:-}"
 # AgentInbox 中 coordinator 的 agent id；用于读取和确认 inbox。
 export FLUME_AGENTINBOX_AGENT_ID="${FLUME_AGENTINBOX_AGENT_ID:-}"
-# Collie mode: set FLUME_COLLIE_SOCKET or FLUME_COLLIE_URL and FLUME_COLLIE_SPACE.
-export FLUME_COLLIE_SOCKET="${FLUME_COLLIE_SOCKET:-}"
-export FLUME_COLLIE_SPACE="${FLUME_COLLIE_SPACE:-}"
-export FLUME_COLLIE_TOKEN="${FLUME_COLLIE_TOKEN:-}"
-export FLUME_COLLIE_URL="${FLUME_COLLIE_URL:-}"
+# Generic delivery command; envelope JSON goes to stdin.
+export FLUME_FEED_EXEC="${FLUME_FEED_EXEC:-}"
 load_secret() {
   local name="$1"
   local service="$2"
