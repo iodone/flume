@@ -33,6 +33,11 @@ export FLUME_WAKE_URL="${FLUME_WAKE_URL:-}"
 export FLUME_WAKE_EXEC="${FLUME_WAKE_EXEC:-}"
 # AgentInbox 中 coordinator 的 agent id；用于读取和确认 inbox。
 export FLUME_AGENTINBOX_AGENT_ID="${FLUME_AGENTINBOX_AGENT_ID:-}"
+# Collie mode: set FLUME_COLLIE_SOURCE. One of socket or URL may be set;
+# the socket is the default when neither is supplied.
+export FLUME_COLLIE_SOURCE="${FLUME_COLLIE_SOURCE:-}"
+export FLUME_COLLIE_SOCKET="${FLUME_COLLIE_SOCKET:-}"
+export FLUME_COLLIE_URL="${FLUME_COLLIE_URL:-}"
 load_secret() {
   local name="$1"
   local service="$2"

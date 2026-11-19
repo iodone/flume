@@ -20,6 +20,7 @@ import {
   type JsonObject,
 } from "./envelope.js";
 import { feed as defaultFeed, type FeedOptions } from "./feed.js";
+import { collieSocketPath, feedCollie, type CollieSink } from "./collie.js";
 
 export const MAX_BODY_BYTES = 8 * 1024 * 1024;
 
@@ -39,6 +40,7 @@ export interface Config {
   wakeUrl?: string;
   wakeExec?: string;
   inboxAgent?: string;
+  collie?: CollieSink;
 }
 
 export type FeedFunction = (
@@ -58,8 +60,18 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
     }
     return adapter;
   });
+  const collieSource = env.FLUME_COLLIE_SOURCE?.trim() || undefined;
+  const collieUrl = env.FLUME_COLLIE_URL?.trim() || undefined;
+  const collieSocket = env.FLUME_COLLIE_SOCKET?.trim() || undefined;
+  const collieMode = Boolean(collieSource || collieUrl || collieSocket);
+  if (collieMode && !collieSource) {
+    throw new ConfigError("FLUME_COLLIE_SOURCE is required in Collie mode");
+  }
+  if (collieSource && collieUrl && collieSocket) {
+    throw new ConfigError("set only one of FLUME_COLLIE_URL and FLUME_COLLIE_SOCKET");
+  }
   const required = [
-    "AGENTINBOX_SOURCE_ID",
+    ...(collieMode ? [] : ["AGENTINBOX_SOURCE_ID"]),
     ...selected.map((adapter) => adapter.SECRET_ENV),
   ];
   const missing = required.filter((name) => !env[name]);
@@ -82,10 +94,18 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
     throw new ConfigError("FLUME_WAKE_EXEC hc requires a space: hc space <space-id>");
   }
 
+  const collie = collieMode
+    ? {
+        source: collieSource!,
+        ...(collieUrl ? { url: collieUrl } : {}),
+        ...(collieSocket ? { socketPath: collieSocket } : !collieUrl ? { socketPath: collieSocketPath(env) } : {}),
+      }
+    : undefined;
+
   return {
     bind: env.FLUME_BIND || "127.0.0.1",
     port,
-    sourceId: env.AGENTINBOX_SOURCE_ID!,
+    sourceId: env.AGENTINBOX_SOURCE_ID ?? "",
     adapters: selected.map((adapter) => adapter.NAME),
     secrets: Object.fromEntries(
       selected.map((adapter) => [adapter.NAME, env[adapter.SECRET_ENV]!]),
@@ -93,6 +113,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
     wakeUrl,
     wakeExec,
     inboxAgent: env.FLUME_AGENTINBOX_AGENT_ID?.trim() || undefined,
+    ...(collie ? { collie } : {}),
   };
 }
 
@@ -225,16 +246,21 @@ async function handleRequest(
   }
 
   try {
-    await feedFn(envelope, { sourceId: config.sourceId });
+    if (config.collie) {
+      await feedCollie(request.headers, body, config.collie);
+    } else {
+      await feedFn(envelope, { sourceId: config.sourceId });
+    }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    console.error(`flume: feed failed for ${envelope.event}: ${detail}`);
+    const target = config.collie ? `collie/${config.collie.source}` : "agentinbox";
+    console.error(`flume: feed failed for ${envelope.event} to ${target}: ${detail}`);
     sendJson(response, 502, { error: "feed failed" });
     return;
   }
 
   console.log(
-    `flume: accepted event=${envelope.event} native_id=${envelope.native_id} subject=${envelope.subject}`,
+    `flume: accepted event=${envelope.event} native_id=${envelope.native_id} subject=${envelope.subject} sink=${config.collie ? `collie/${config.collie.source}` : "agentinbox"}`,
   );
   sendJson(response, 202, { accepted: 1 });
 }

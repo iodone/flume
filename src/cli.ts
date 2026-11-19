@@ -57,15 +57,20 @@ export async function main(
 
   let daemon: Daemon | null = null;
   try {
-    daemon = await ensureAgentInbox(daemonEnvironment(runtimeEnv));
+    // Collie owns dedupe, persistence and dispatch; no AgentInbox or wake gate is involved.
+    if (!config.collie) {
+      daemon = await ensureAgentInbox(daemonEnvironment(runtimeEnv));
+    }
     const server = createFlumeServer(config);
     await listen(server, config);
     const address = localAddress(server);
-    const mode = daemon.child ? "started" : "attached";
+    const target = config.collie
+      ? `collie/${config.collie.source} via ${config.collie.url ?? config.collie.socketPath}`
+      : `agentinbox ${daemon?.child ? "started" : "attached"} at ${daemon?.socketPath}`;
     process.stdout.write(
-      `flume: listening on ${address.address}:${address.port}; agentinbox ${mode} at ${daemon.socketPath}\n`,
+      `flume: listening on ${address.address}:${address.port}; ${target}\n`,
     );
-    installShutdown(server, daemon.child);
+    installShutdown(server, daemon?.child ?? null);
     return 0;
   } catch (error) {
     daemon?.child?.kill("SIGTERM");

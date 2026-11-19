@@ -1,8 +1,8 @@
 # flume
 
-零状态事件转运层：把外部系统的事件**验签 → 归一成统一 envelope → 喂进收件箱 → 转发唤醒**。命名自渡槽：只负责把水从这头运到那头。
+零状态事件转运层：把外部系统的事件**验签 → 归一成统一 envelope → 喂进收件箱或 Collie → 转发唤醒**。命名自渡槽：只负责把水从这头运到那头。
 
-核心是 **flume + AgentInbox**：flume 负责接入和搬运，AgentInbox 负责去重、持久化、订阅、inbox 和 activation。事件源和唤醒器都可替换；文档以 GitHub 事件和通用唤醒脚本为例。
+默认是 **flume + AgentInbox**：flume 负责接入和搬运，AgentInbox 负责去重、持久化、订阅、inbox 和 activation。设置 `FLUME_COLLIE_SOURCE` 后进入 **Collie 模式**：flume 只做验签，把原始 webhook 字节和签名头转发到 Collie 的 `/v1/in/<source>`，由 Collie 负责 Event、去重、归并和 coordinator 派发；不再启动 AgentInbox，也不需要 wake gate。
 
 [使用指南 → docs/USAGE.md](docs/USAGE.md) · [架构 → docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · [Adapter 与扩展 → docs/ADAPTERS.md](docs/ADAPTERS.md) · [卸载 → docs/REMOVAL.md](docs/REMOVAL.md)
 
@@ -138,7 +138,10 @@ $EDITOR .env
 | 变量 | 默认值 | 用途 |
 | :--- | :--- | :--- |
 | `FLUME_ADAPTERS` | `github` | 启用的事件源，逗号分隔：`github`、`gitlab` 或 `github,gitlab` |
-| `AGENTINBOX_SOURCE_ID` | **必填** | AgentInbox 的 source id；事件写入该 source，订阅按它匹配 |
+| `AGENTINBOX_SOURCE_ID` | 默认模式必填 | AgentInbox 的 source id；设置 `FLUME_COLLIE_SOURCE` 后不需要 |
+| `FLUME_COLLIE_SOURCE` | 未设置 | Collie 模式：Collie `sources.json` 中的 source key；设置后事件转发到 `/v1/in/<source>` |
+| `FLUME_COLLIE_SOCKET` | `~/.local/state/collie/service.sock` | Collie 模式下的 Unix socket；与 `FLUME_COLLIE_URL` 二选一 |
+| `FLUME_COLLIE_URL` | 未设置 | Collie 模式下的 HTTP base URL；与 socket 二选一，适合远程或容器 |
 | `FLUME_GITHUB_SECRET` | 从 Keychain 读取 | GitHub webhook secret；非 macOS 或本地测试时可直接用环境变量 |
 | `FLUME_GITLAB_TOKEN` | 未设置 | 仅在启用 `gitlab` adapter 时需要 |
 | `FLUME_BIND` | `0.0.0.0` | 监听地址；只允许本机访问时改 `127.0.0.1` |
@@ -148,6 +151,40 @@ $EDITOR .env
 | `FLUME_AGENTINBOX_AGENT_ID` | 未设置 | coordinator 在 AgentInbox 中的 agent id，用于读取和确认 inbox |
 
 AgentInbox 的 source 和订阅由部署配置；flume 侧集中设置 `FLUME_ADAPTERS`、webhook secret 和唤醒目标。
+
+### Collie 模式
+
+Collie 模式把 flume 当作**有验签能力的反向代理**，不启动 AgentInbox：
+
+```text
+GitLab/GitHub → flume（验签）→ Collie /v1/in/<source>（Event、去重、归并、派发）→ coordinator
+```
+
+`.env` 示例：
+
+```bash
+FLUME_ADAPTERS=gitlab
+FLUME_COLLIE_SOURCE=gitlab
+FLUME_COLLIE_SOCKET=$HOME/.local/state/collie/service.sock
+# 或：FLUME_COLLIE_URL=http://127.0.0.1:19421
+```
+
+Collie 侧配置 `~/.config/collie/sources.json`：
+
+```json
+{
+  "sources": {
+    "gitlab": {
+      "adapter": "gitlab",
+      "space": "collie",
+      "space_map": { "group/project": "collie" },
+      "secret_env": "FLUME_GITLAB_TOKEN"
+    }
+  }
+}
+```
+
+flume 保留原始 body 和签名头，Collie 的 source adapter 仍会按自己的 `secret` / `secret_env` 再验一次；本地 Unix socket 在未配置 secret 时视为本地可信，远程 `FLUME_COLLIE_URL` 应配置 secret。GitLab 事件进入后，Collie 自己创建 Event 和 Decision，不需要 `/activation` 或 intake skill。
 
 ### 唤醒目标
 
