@@ -275,9 +275,9 @@ test("supports a generic CLI command with agent arguments", async () => {
     assert.match(args, /agentId=herdr-main/);
     assert.match(args, /newEntryCount=1/);
     assert.match(args, /latestEntryId=entry-42/);
-    assert.match(args, /Follow the workflow-event-intake skill/);
+    assert.match(args, /process them using your own workflow/);
     assert.match(args, /wake signal, not the event body/);
-    assert.match(args, /at most 50 entries/);
+    assert.match(args, /pending inbox entries/);
     assert.match(args, /never `ack --all`/);
     assert.doesNotMatch(args, /herdr-projects/);
     assert.doesNotMatch(args, /workflow-dsx/);
@@ -336,7 +336,7 @@ test("wakes only the live Assistant whose labels match the configured space", as
     );
     assert.match(sendArgs.slice(2).join("\n"), /newEntryCount=2/);
     assert.match(sendArgs.slice(2).join("\n"), /latestEntryId=entry-42/);
-    assert.match(sendArgs.slice(2).join("\n"), /workflow-event-intake/);
+    assert.match(sendArgs.slice(2).join("\n"), /your own workflow/);
     assert.equal(await readFile(callsFile, "utf8"), "ls\n--json\nget\nt-other\nget\nt-helper\nget\nt-assistant\nsend\nt-assistant\n");
   } finally {
     await rm(directory, { recursive: true, force: true });

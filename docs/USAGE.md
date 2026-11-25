@@ -9,7 +9,7 @@ flume 是零状态事件转运层：**验签 → 归一成统一 envelope → �
 ### 前置条件
 
 - Node.js `^22.23.4 || ^24.22.1 || >=26.12.1`
-- 一个 URL 或可执行脚本唤醒目标
+- AgentInbox 模式需要一个 URL 或可执行脚本唤醒目标；generic exec 模式不需要
 - 能访问 flume 监听地址的事件源；当前示例是 GitHub
 
 依赖和构建由 [`run-flume.sh`](../run-flume.sh) 在首次启动时自动完成。
@@ -18,9 +18,8 @@ flume 是零状态事件转运层：**验签 → 归一成统一 envelope → �
 
 1. 按第 3 节写入 webhook secret。
 2. 按第 3 节配置事件源 webhook。
-3. 按第 3 节复制并配置 agent intake skill。
-4. 按第 3 节生成并填写 `.env`。
-5. 启动：
+3. 按第 3 节生成并填写 `.env`。
+4. 启动：
 
 ```bash
 ./run-flume.sh
@@ -28,30 +27,17 @@ flume 是零状态事件转运层：**验签 → 归一成统一 envelope → �
 
 脚本会自解析仓库路径、读取 secret，并在缺少依赖或构建产物时自动执行 `npm install` / `npm run build`。
 
-## 2. 流程：一条 GitHub PR 事件
+## 2. 流程：投递事件并唤醒 agent
 
-主序列图只在 README 维护：[一条 GitHub PR 事件的完整时序](../README.md#event-flow)。
+GitHub 只是事件源示例；其他 adapter 使用同一条链路。
 
-这里补充每一步的细节。GitHub 是事件源示例；换成其他 adapter 后，flume、AgentInbox 和 agent 侧的处理方式不变。
+1. 事件源发出 webhook，例如 GitHub `pull_request.opened` → `POST /github`。
+2. flume 验签并归一成 `{source, event, subject, native_id, occurred_at, payload}`。
+3. 默认模式调用 AgentInbox source event 接口；设置 `FLUME_FEED_EXEC` 时改为交给配置的投递 CLI。
+4. AgentInbox 模式可向 flume `POST /activation`，只带 `kind/newEntryCount/latestEntryId/summary`。
+5. flume 校验激活字段后执行唤醒命令，agent 按自己的实现读取和处理事件。
 
-场景：`owner/repo#42` 由 `ada` 打开，你是 requested reviewer。
-
-1. GitHub 发出 `pull_request.opened`，`POST /github`。
-2. flume 用 `X-Hub-Signature-256` 验签，归一成 `{source:"github", event:"pull_request.opened", subject:"owner/repo#42", payload:{...}}`。
-3. flume 调用 AgentInbox source event 接口；AgentInbox 按 `X-GitHub-Delivery` 去重、匹配 subscription、写入 inbox entry。
-4. AgentInbox 向 flume `POST /activation`，只带 `kind/newEntryCount/latestEntryId/summary`；正文留在 AgentInbox。
-5. flume 校验字段后执行唤醒命令；prompt 只带 `agentId`、`newEntryCount` 和固定指令（按名字指名 `workflow-event-intake`），PR 正文由 coordinator 从 inbox 读取。
-6. coordinator 醒来后读取 inbox，按 `envelope.source` 加载 `sources/github.md`。
-7. source policy 把事件映射成 `REVIEW_REQUEST`：PR 作者不是你，你是 requested reviewer 或 assignee，且不是 draft。
-8. coordinator 在任务系统建 review task；brief 包含 PR URL、head sha、author、base branch、entry id、dedupe key，并指定项目自己的 `review` playbook。
-9. review worker 建 worktree、读取人类评论和 diff、按项目流程分析代码、写 review 文档；是否发 review comment 由授权决定，approve / request changes / merge 由人类决定。
-10. coordinator 只 `ack --through` 自己实际审过的 entry。
-
-如果 `ada` 后来提交了 review：
-
-- `pull_request_review.submitted`（`approved` / `changes_requested` / `commented`）→ `FEEDBACK`。
-- `pull_request_review_comment.created` 或 PR 上的 `issue_comment.created` → `FEEDBACK`。
-- coordinator 按 `headRefName` 找回对应 task；task 空闲时把原文 `tell` 过去，merge 由人类决定。
+是否分类、建任务、调用工具、回写或 ack 都由 agent 自己决定；flume 不规定这些步骤。
 
 ## 3. 配置
 
@@ -77,7 +63,7 @@ $EDITOR .env
 | `FLUME_PORT` | `19420` | 监听端口；修改后 webhook URL 要同步修改 |
 | `FLUME_WAKE_URL` | 未设置 | URL 模式：向外部 HTTP endpoint POST 激活字段；设置后不使用 exec |
 | `FLUME_WAKE_EXEC` | 未设置 | exec 模式：执行任意脚本，完整 prompt 作为最后参数；Shepherdr 写 `hc space <id>` |
-| `FLUME_AGENTINBOX_AGENT_ID` | 未设置 | coordinator 在 AgentInbox 中的 agent id，用于读取和确认 inbox |
+| `FLUME_AGENTINBOX_AGENT_ID` | 未设置 | agent 在 AgentInbox 中的 agent id，用于读取和确认 inbox |
 
 AgentInbox 的 source 和订阅由部署配置；flume 侧集中设置 `FLUME_ADAPTERS`、webhook secret 和唤醒目标。
 
@@ -170,48 +156,13 @@ security delete-generic-password -a flume -s flume-github-webhook
 
 URL 必须是 GitHub 能访问到的 flume 主机地址。如果改了 `FLUME_PORT`，端口也要同步。
 
-flume 验签使用 `X-Hub-Signature-256`，并以 `X-GitHub-Delivery` 作为 `native_id`。同一投递重复 redeliver 会由 AgentInbox 去重。
+flume 验签使用 `X-Hub-Signature-256`，并以 `X-GitHub-Delivery` 作为 `native_id`。同一投递重复 redeliver 时，由 AgentInbox 或所选投递目标负责去重。
 
-### agent intake skill
+### agent 处理
 
-intake skill 由 agent workspace 提供，flume 不配置路径：唤醒 prompt 指名
-`workflow-event-intake`，agent 在自己的 `.agents/skills/` 下按名字加载。
+flume 不要求 agent 安装某个 skill，也不规定任务系统、分类方式或 playbook。agent 被唤醒后按自己的实现读取和处理事件；使用 AgentInbox 时，ack 范围由 agent 根据实际处理结果决定。
 
-1. 复制模板到 agent workspace：
-
-   ```bash
-   cp -R templates/workflow-event-intake \
-     /path/to/your-agent/.agents/skills/
-   ```
-
-2. 编辑 `sources/<source>.md`，按你的任务系统填命令和映射。
-3. 确认 skill 名字仍是 `workflow-event-intake`（prompt 按名字找它）。
-
-skill 的职责：
-
-1. `agentinbox inbox read` 读未 ack 条目，最多 50 条。
-2. 按 `envelope.source` 分组，加载 `sources/<source>.md`。
-3. 把事件映射成 intent：`REVIEW_REQUEST` / `FEEDBACK` / `ISSUE_UPDATE` / `LIFECYCLE` / `NOISE`。
-4. 按 intent 路由：
-   - `REVIEW_REQUEST` → 在任务系统建 review task 并派工
-   - `FEEDBACK` → 找回已有 task，原始文本 `tell` 过去
-   - `ISSUE_UPDATE` → 按 source policy：`ignore` 只 ack（模板默认），`queue` 才入队
-   - `LIFECYCLE` → 把对应 task 置为 done，原因写进消息
-   - `NOISE` → 只 ack
-5. `ack --through` 最后一条实际审过的 entry。
-
-intake 决定“做不做、做哪个 task”；review 的判据和步骤由任务自己的 `review` playbook 执行，反馈继续由原 task 的 playbook 执行。
-
-GitHub 的参考映射（按你的配置修改 `sources/github.md`）：
-
-| GitHub 事件 | intent | 动作 |
-| :--- | :--- | :--- |
-| 我是 requested reviewer/assignee 的 open PR | `REVIEW_REQUEST` | 建 review task 并立即派工 |
-| 我的 PR 出现 review / review comment / issue comment | `FEEDBACK` | 找回 task，原文交给 agent；merge 由人类决定 |
-| 我的 PR 被 approve / changes requested / dismiss | `FEEDBACK` | 把 review state 和 head sha 交给 task |
-| issue 变动 | `ISSUE_UPDATE` | 按 source policy：`ignore` 只 ack（模板默认），`queue` 才入队 |
-| merged / closed | `LIFECYCLE` | 把对应 task 置为 done，原因写进消息 |
-| `push.received`、`workflow_run.*`、重复投递 | `NOISE` | 审阅后 ack |
+仓库内置 `templates/workflow-event-intake/` 作为可选的事件处理 skill 模板，提供读取、分类、路由和 ack 的通用起点。可以复制后修改，也可以用自定义 skill 完全替换；名称和加载方式由 agent 自己决定，flume 不绑定它。
 
 ### GitLab（可选）
 
@@ -257,8 +208,8 @@ curl -sS http://127.0.0.1:19420/healthz
 
 1. GitHub webhook 的 **Redeliver** 返回 `2xx`。
 2. 日志里能看到 `accepted event=…` 和 `woke …`。
-3. coordinator 空闲后，任务系统里出现由 inbox 聚合出的 task。
-4. 处理完成后 `agentinbox inbox read --agent-id <agent-id> --limit 10` 应该为空；没 ack 的条目说明 coordinator 还没审完。
+3. agent 或目标系统的日志显示事件已被读取和处理。
+4. AgentInbox 模式下，只有实际处理过的条目被 ack；未处理条目仍保留。
 
 本地冒烟测试不会读取真实 AgentInbox：
 
@@ -326,7 +277,7 @@ AgentInbox 写 inbox 后向 flume `/activation` 发送：
 
 flume 只接受上述四个字段。`newEntryCount == 0` 返回 `202 {"accepted":0}`；大于 `0` 时执行唤醒命令。
 
-prompt 只包含配置中的 `agentId`、经过校验的 `newEntryCount`、`latestEntryId` 和固定指令；事件正文由 coordinator 从 inbox 读取。`summary` 只用于日志。coordinator 收到后用 AgentInbox skill 读取 inbox，并加载名为 `workflow-event-intake` 的策略 skill。
+prompt 只包含配置中的 `agentId`、经过校验的 `newEntryCount`、`latestEntryId` 和通用处理提示；事件正文由 agent 从自己的事件存储读取。`summary` 只用于日志。flume 不指定 agent 使用什么 skill、任务模型或确认流程。
 
 如果设置 `FLUME_WAKE_URL`，flume 会向该 URL POST 四个字段并带 `X-Flume-Activation-Mode: activation_only`。URL 与 exec 互斥；`hc space <id>` 会让目标 space 当前的 live Assistant 收到 prompt。
 
@@ -376,4 +327,4 @@ adapter 只验签和折 envelope；排队、重试、落盘、订阅过滤和唤
 | inbox 有条目但 agent 没醒 | 检查 `FLUME_WAKE_EXEC` 和 `/activation` 日志 |
 | 请求返回 `413 {"error":"body too large"}` | webhook body 超过 8 MiB |
 
-验证时使用 GitHub 的 Redeliver 或真实 PR 事件，覆盖从 webhook 到 inbox 的完整链路。
+验证时使用事件源的 Redeliver 或测试事件，覆盖从 webhook 到所选投递目标的完整链路。

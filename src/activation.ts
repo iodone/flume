@@ -5,7 +5,6 @@ import { isJsonObject, type JsonObject } from "./envelope.js";
 export const KIND = "agentinbox.activation";
 export const ACTIVATION_MODE = "activation_only";
 export const DEFAULT_WAKE_TIMEOUT_MS = 10_000;
-export const INTAKE_SKILL = "workflow-event-intake";
 
 const BODY_FIELDS = ["entries", "items"] as const;
 
@@ -183,10 +182,9 @@ export function wakePrompt(
     `latestEntryId=${activation.latestEntryId}`,
     "",
     "This is a wake signal, not the event body.",
-    "1. Read the unacked inbox for agentId, at most 50 entries; record the last entryId you inspect.",
-    `2. Follow the ${INTAKE_SKILL} skill from your workspace. It is the only policy for classification, dedupe, task changes, and ack.`,
-    "3. Ack only through the last inspected entry; never `ack --all`.",
-    "4. Reply with entries reviewed, tasks added/updated, entries acked, and anything ambiguous.",
+    "Read pending inbox entries and process them using your own workflow.",
+    "Acknowledge only entries you actually processed; never `ack --all`.",
+    "Reply with what you processed and anything ambiguous.",
   ].join("\n");
 }
 
