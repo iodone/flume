@@ -28,8 +28,7 @@ flume adapter 只保证 `source` 和 `event` 稳定；review / feedback / issue 
 - 验签：`X-Hub-Signature-256`（兼容 `X-Hub-Signature`），HMAC-SHA256。
 - 去重：`X-GitHub-Delivery` 作为 `native_id`。
 - 事件：`pull_request.*`、`pull_request_review.*`、
-  `pull_request_review_comment.*`、`issue.*`、`issue_comment.*`、`push`、
-  `workflow_run.*`。
+  `pull_request_review_comment.*`、`issue.*`、`issue_comment.*`、`push.received`、`workflow_run.*`。
 - 合并：`pull_request.closed` 且 `pull_request.merged=true` 归一为
   `pull_request.merged`。
 
@@ -55,7 +54,7 @@ export function normalize(headers, body, document): Envelope;
 | 字段 | 规则 |
 | :--- | :--- |
 | `native_id` | 同一投递必须稳定；优先用上游事件 ID，没有则对 raw body 做 SHA-256 |
-| `event` | 稳定的事件名，建议 `<system>.<action>` |
+| `event` | 稳定的事件名，使用 `<object>.<action>`；无明确动作时用 `<object>.received` |
 | `occurred_at` | 上游时间戳，ISO8601；允许 `parseTimestamp` 归一 |
 | `source` | 等于 `NAME` |
 | `subject` | 人可读资源标识，例如 `group/project!123` |

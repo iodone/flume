@@ -88,7 +88,7 @@ function eventName(kind: string, attrs: JsonObject): string {
     return "note.created";
   }
   if (kind === "push") {
-    return "push";
+    return "push.received";
   }
   return `${kind}.received`;
 }

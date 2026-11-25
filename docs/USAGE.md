@@ -68,7 +68,9 @@ $EDITOR .env
 | 变量 | 默认值 | 用途 |
 | :--- | :--- | :--- |
 | `FLUME_ADAPTERS` | `github` | 启用的事件源，逗号分隔：`github`、`gitlab` 或 `github,gitlab` |
-| `AGENTINBOX_SOURCE_ID` | **必填** | AgentInbox 的 source id；事件写入该 source，订阅按它匹配 |
+| `AGENTINBOX_SOURCE_ID` | AgentInbox 模式必填 | AgentInbox 的 source id；事件写入该 source，订阅按它匹配；设置 `FLUME_FEED_EXEC` 后不需要 |
+| `FLUME_FEED_EXEC` | 未设置 | 通用投递命令；envelope JSON 从 stdin 传入，不绑定目标服务 |
+| `FLUME_FEED_TIMEOUT_MS` | `15000` | 投递 exec 的超时；目标服务处理较慢时调大 |
 | `FLUME_GITHUB_SECRET` | 从 Keychain 读取 | GitHub webhook secret；非 macOS 或本地测试时可直接用环境变量 |
 | `FLUME_GITLAB_TOKEN` | 未设置 | 仅在启用 `gitlab` adapter 时需要 |
 | `FLUME_BIND` | `0.0.0.0` | 监听地址；只允许本机访问时改 `127.0.0.1` |
@@ -79,6 +81,19 @@ $EDITOR .env
 
 AgentInbox 的 source 和订阅由部署配置；flume 侧集中设置 `FLUME_ADAPTERS`、webhook secret 和唤醒目标。
 
+### Generic agent CLI intake
+
+使用 `FLUME_FEED_EXEC` 时，flume 把归一后的 envelope 写到任意 CLI 的 stdin，例如：
+
+```bash
+FLUME_FEED_EXEC="/usr/local/bin/agent-intake --format json"
+FLUME_FEED_TIMEOUT_MS=120000
+```
+
+目标 CLI 自己负责持久化、路由和后续 agent 处理。flume 不启动 AgentInbox，也不需要 activation 唤醒配置。`FLUME_FEED_EXEC` 负责事件投递，`FLUME_WAKE_EXEC` 只属于 AgentInbox activation 的唤醒链路，两者不能互相替代。
+
+`GET /healthz` 返回 `{ "ok": true, "delivery": "exec" }` 时，说明当前进程使用 generic exec，而不是 AgentInbox。
+
 ### 通知 agent：URL / exec 二选一
 
 `FLUME_WAKE_URL` 与 `FLUME_WAKE_EXEC` 同时设置会在启动时报错。exec 不是 stdio：
@@ -88,6 +103,9 @@ shell。例如自定义脚本：
 ```bash
 FLUME_WAKE_EXEC="/path/to/notify --target ops"
 ```
+
+如果 agent CLI 接受 prompt 作为最后一个参数，也可以直接写 `FLUME_WAKE_EXEC="claude"` 或
+`FLUME_WAKE_EXEC="codex"`；需要固定工作目录、权限或其他参数时，用包装脚本更稳妥。
 
 Shepherdr 的一个 exec 示例：
 
@@ -193,7 +211,7 @@ GitHub 的参考映射（按你的配置修改 `sources/github.md`）：
 | 我的 PR 被 approve / changes requested / dismiss | `FEEDBACK` | 把 review state 和 head sha 交给 task |
 | issue 变动 | `ISSUE_UPDATE` | 按 source policy：`ignore` 只 ack（模板默认），`queue` 才入队 |
 | merged / closed | `LIFECYCLE` | 把对应 task 置为 done，原因写进消息 |
-| push、workflow_run、重复投递 | `NOISE` | 审阅后 ack |
+| `push.received`、`workflow_run.*`、重复投递 | `NOISE` | 审阅后 ack |
 
 ### GitLab（可选）
 

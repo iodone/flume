@@ -74,6 +74,20 @@ test("normalizes pull_request.opened to the envelope contract", () => {
   });
 });
 
+test("normalizes push with the object/action event contract", () => {
+  const push = {
+    repository: { full_name: "owner/repo" },
+    head_commit: { timestamp: "2026-10-23T07:30:00Z" },
+  };
+  const envelope = github.normalize(
+    { "x-github-event": "push", "x-github-delivery": "delivery-push" },
+    body(push),
+    push,
+  );
+  assert.equal(envelope.event, "push.received");
+  assert.equal(envelope.subject, "owner/repo");
+});
+
 test("native_id is stable across repeated deliveries", () => {
   const raw = body(PULL_REQUEST_HOOK);
   const headers = { "x-github-event": "pull_request" };
