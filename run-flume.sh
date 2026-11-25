@@ -31,7 +31,7 @@ export FLUME_PORT="${FLUME_PORT:-19420}"
 # Shepherdr 用 hc space <space-id>；脚本参数按空格拆分，不经过 shell。
 export FLUME_WAKE_URL="${FLUME_WAKE_URL:-}"
 export FLUME_WAKE_EXEC="${FLUME_WAKE_EXEC:-}"
-# AgentInbox 中 coordinator 的 agent id；用于读取和确认 inbox。
+# AgentInbox 中 agent 的 id；用于读取和确认 inbox。
 export FLUME_AGENTINBOX_AGENT_ID="${FLUME_AGENTINBOX_AGENT_ID:-}"
 # Generic delivery command; envelope JSON goes to stdin.
 export FLUME_FEED_EXEC="${FLUME_FEED_EXEC:-}"
