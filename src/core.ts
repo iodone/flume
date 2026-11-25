@@ -142,7 +142,7 @@ async function handleRequest(
   const pathname = url.pathname.replace(/^\/+|\/+$/g, "");
 
   if (request.method === "GET" && pathname === "healthz") {
-    sendJson(response, 200, { ok: true });
+    sendJson(response, 200, { ok: true, delivery: config.feedExec ? "exec" : "agentinbox" });
     return;
   }
   if (request.method !== "POST") {

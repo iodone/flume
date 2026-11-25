@@ -53,6 +53,17 @@ test("normalizes merge_request.opened to the envelope contract", () => {
   });
 });
 
+test("normalizes push with the object/action event contract", () => {
+  const push = {
+    object_kind: "push",
+    project: { path_with_namespace: "group/project" },
+    object_attributes: { updated_at: "2026-10-23 06:59:00 UTC" },
+  };
+  const envelope = gitlab.normalize({}, body(push), push);
+  assert.equal(envelope.event, "push.received");
+  assert.equal(envelope.subject, "group/project");
+});
+
 test("native_id is stable across repeated deliveries", () => {
   const raw = body(MR_HOOK);
   const headers = { "x-gitlab-event": "Merge Request Hook" };

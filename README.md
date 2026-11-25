@@ -25,7 +25,7 @@ flume 把接入、可靠性和业务判断拆开：
 
 ## 快速安装
 
-需要 Node.js `^22.23.4 || ^24.22.1 || >=26.12.1`，以及一个 URL 或可执行脚本唤醒目标。
+需要 Node.js `^22.23.4 || ^24.22.1 || >=26.12.1`。AgentInbox 模式还需要 source id 和唤醒目标；使用 `FLUME_FEED_EXEC` 时不需要唤醒目标。
 
 依赖和构建由 [`run-flume.sh`](run-flume.sh) 在首次启动时自动完成。
 
@@ -159,15 +159,27 @@ AgentInbox 的 source 和订阅由部署配置；flume 侧集中设置 `FLUME_AD
 FLUME_FEED_EXEC="/path/to/your-delivery-cli --some-arg"
 ```
 
-投递目标是 Collie、消息队列、审计服务还是其他系统，都由这个 CLI 自己决定；flume 不包含任何目标服务的 SDK、endpoint 或字段映射。
+投递目标服务、消息队列或审计系统由这个 CLI 自己决定；flume 不包含任何目标服务的 SDK、endpoint 或字段映射。
 
-例如，用 Collie 提供的 intake CLI：
+例如一个从 stdin 接收 JSON 的 agent CLI：
 
 ```bash
-FLUME_FEED_EXEC="/Users/mi/.local/bin/collie intake event --file - --space collie"
+FLUME_FEED_EXEC="/usr/local/bin/agent-intake --format json"
+FLUME_FEED_TIMEOUT_MS=120000
 ```
 
-这里 `collie intake` 是普通 CLI，flume 只负责把 envelope 交给它；换成别的服务只需要改这一行配置，不需要改 flume 代码。
+flume 只负责验签、归一和投递；目标 CLI 负责持久化、路由和后续 agent 处理。`FLUME_FEED_TIMEOUT_MS` 默认 15000ms，目标处理较慢时可调大；命令返回非零或超时时，webhook 收到 502。
+
+只使用 `FLUME_FEED_EXEC` 时不启动 AgentInbox，也不需要 `FLUME_WAKE_EXEC`。前者负责事件投递，后者负责 AgentInbox activation 的唤醒，两者不能互相替代。
+
+启动后可检查当前 delivery 模式：
+
+```bash
+curl -s http://127.0.0.1:19420/healthz
+# {"ok":true,"delivery":"exec"}
+```
+
+投递目标由这个 CLI 自己决定；flume 不包含目标服务的 SDK、endpoint 或字段映射。
 
 ### 唤醒目标
 
@@ -175,6 +187,8 @@ FLUME_FEED_EXEC="/Users/mi/.local/bin/collie intake event --file - --space colli
 prompt 作为参数，不是 stdio：不会向 stdin 写内容。参数按空格拆分，不经过 shell。
 `.env` 中值含空格必须带引号。`FLUME_WAKE_URL` 与 `FLUME_WAKE_EXEC` 同时设置会在启动时报错。
 
+- **exec / agent CLI**：如果 CLI 接受 prompt 作为最后一个参数，可以写 `FLUME_WAKE_EXEC="claude"` 或
+  `FLUME_WAKE_EXEC="codex"`；需要固定工作目录、权限或其他参数时，用包装脚本更稳妥。
 - **exec / 任意脚本**：例如 `FLUME_WAKE_EXEC="/path/to/notify --target ops"`。命令按空格拆分，
   完整唤醒 prompt 作为最后一个参数传入，可直接替换通知实现。
 - **exec / Shepherdr 示例**：`FLUME_WAKE_EXEC="hc space <space-id>"` 会让 flume 查找该
@@ -256,7 +270,7 @@ GitHub 的参考映射（按你的配置修改 `sources/github.md`）：
 | 我的 PR 被 approve / changes requested / dismiss | `FEEDBACK` | 把 review state 和 head sha 交给 task |
 | issue 变动 | `ISSUE_UPDATE` | 按 source policy：`ignore` 只 ack（模板默认），`queue` 才入队 |
 | merged / closed | `LIFECYCLE` | 把对应 task 置为 done，原因写进消息 |
-| push、workflow_run、重复投递 | `NOISE` | 审阅后 ack |
+| `push.received`、`workflow_run.*`、重复投递 | `NOISE` | 审阅后 ack |
 
 ## 扩展适配
 

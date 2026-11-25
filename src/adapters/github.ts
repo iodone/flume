@@ -109,7 +109,7 @@ function eventName(hook: string, action: string, document: JsonObject): string {
     return action ? `workflow_run.${action}` : "workflow_run.received";
   }
   if (name === "push") {
-    return "push";
+    return "push.received";
   }
   return action ? `${name}.${action}` : `${name}.received`;
 }

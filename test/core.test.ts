@@ -72,6 +72,30 @@ test("feed exec replaces AgentInbox without naming a target service", () => {
   assert.equal(config.sourceId, "");
 });
 
+test("healthz reports generic exec delivery", async () => {
+  const config = configFromEnv({
+    FLUME_ADAPTERS: "gitlab",
+    FLUME_GITLAB_TOKEN: "gl-token",
+    FLUME_FEED_EXEC: "/tmp/deliver --flag",
+  });
+  const server = createFlumeServer(config);
+  await listen(server);
+  const { port } = server.address() as AddressInfo;
+  try {
+    const body = await new Promise<string>((resolve, reject) => {
+      http.get({ host: "127.0.0.1", port, path: "/healthz" }, (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+        response.on("error", reject);
+      }).on("error", reject);
+    });
+    assert.deepEqual(JSON.parse(body), { ok: true, delivery: "exec" });
+  } finally {
+    await close(server);
+  }
+});
+
 test("recognizes only the exact hc space command shape", () => {
   assert.equal(isHcSpaceExec("/usr/local/bin/hc", ["space", "space-1"]), true);
   assert.equal(isHcSpaceExec("myhc", ["space", "space-1"]), false);
